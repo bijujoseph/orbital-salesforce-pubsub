@@ -15,8 +15,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run Maven verify
         run: |
-          if [ -f pom.xml ]; then
-            mvn -B -ntp verify
-          else
+          mapfile -t poms < <(find . -name pom.xml -not -path '*/target/*')
+          if [ "${#poms[@]}" -eq 0 ]; then
             echo "No pom.xml found yet; skipping Maven verification."
+            exit 0
+          fi
+          for pom in "${poms[@]}"; do
+            mvn -B -ntp -f "$pom" verify
+          done
           fi
