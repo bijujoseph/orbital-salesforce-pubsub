@@ -13,5 +13,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Validate repository bootstrap
-        run: echo "CI is configured"
+      - name: Run Maven verify
+        run: |
+          if [ -f pom.xml ]; then
+            mvn -B -ntp verify
+          else
+            echo "No pom.xml found yet; skipping Maven verification."
+          fi
