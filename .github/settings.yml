@@ -1,0 +1,26 @@
+repository:
+  private: false
+  has_projects: true
+  has_wiki: false
+  has_downloads: true
+  default_branch: main
+  topics:
+    - salesforce
+    - pub-sub-api
+    - orbitalhq
+    - taxi
+    - grpc
+    - platform-events
+  vulnerability_alerts: true
+
+branches:
+  - name: main
+    protection:
+      required_pull_request_reviews: {}
+      required_status_checks:
+        strict: true
+        contexts:
+          - CI
+      enforce_admins: false
+      required_linear_history: true
+      allow_force_pushes: false
