@@ -52,7 +52,23 @@ mutate GitHub Issues or Project data.
    completed task.
 4. After a `READY FOR REVIEW` verdict, `pull_request_opener` publishes the issue
    branch and opens its pull request.
-5. `final_reviewer` evaluates milestone or release readiness across completed
+5. After the PR is opened, the orchestrator polls its status via read-only
+   `github` MCP operations every 1 minute, up to 10 minutes per round, always
+   scoped to that PR's exact issue branch/worktree:
+   - Merged -> proceed to worktree cleanup for that issue's branch/worktree.
+   - Open with new Copilot (or human) review comments requesting changes ->
+     invoke `coder`, pinned to that same issue branch/worktree, to triage each
+     comment against the assigned issue and canonical blueprint. `coder` may
+     reject a comment with stated rationale if it disagrees. For comments it
+     accepts, `coder` applies the smallest fix, re-runs required verification,
+     commits, and pushes the same branch. `task_reviewer` then re-checks the
+     updated diff and reports an updated verdict; it must not edit anything
+     itself. Start a new 10-minute poll round after the push.
+   - Open with no new comments after 10 minutes -> stop, report the pending
+     PR for human follow-up.
+   - After 3 poll/fix rounds (up to ~30 minutes total) -> stop regardless of
+     outcome and report the PR for human follow-up.
+6. `final_reviewer` evaluates milestone or release readiness across completed
    tasks.
 
 ## Implementation authority
