@@ -130,6 +130,9 @@ class ClientCredentialsAuthProviderTest {
         () -> new ClientCredentialsAuthProvider(URI.create("/relative"), "client", "secret"));
     assertThrows(
         AuthenticationException.class,
+        () -> new ClientCredentialsAuthProvider("ftp://localhost", "client", "secret"));
+    assertThrows(
+        AuthenticationException.class,
         () -> new ClientCredentialsAuthProvider("http://localhost", null, "secret"));
     assertThrows(
         AuthenticationException.class,
@@ -348,6 +351,17 @@ class ClientCredentialsAuthProviderTest {
         blankTenant.authenticate().toCompletableFuture().get(5, TimeUnit.SECONDS);
     assertEquals(null, blankTenantSession.tenantId());
     assertEquals("user-from-id", blankTenantSession.userId());
+
+    replaceResponse(
+        200,
+        "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\",\"tenant_id\":\" \",\"user_id\":\"\",\"id\":\"https://login.salesforce.com/id/tenant-from-id/user-from-id\"}");
+    ClientCredentialsAuthProvider blankExplicitIdentity =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client", "secret");
+    SalesforceSession identityFromUrl =
+        blankExplicitIdentity.authenticate().toCompletableFuture().get(5, TimeUnit.SECONDS);
+    assertEquals("tenant-from-id", identityFromUrl.tenantId());
+    assertEquals("user-from-id", identityFromUrl.userId());
   }
 
   @Test

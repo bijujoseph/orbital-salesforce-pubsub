@@ -138,12 +138,12 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       String userId = firstValue(body, "user_id", "userId");
 
       String identity = firstValue(body, "id");
-      if (tenantId == null || userId == null) {
+      if (isBlank(tenantId) || isBlank(userId)) {
         String[] identityParts = identityParts(identity);
-        if (tenantId == null) {
+        if (isBlank(tenantId)) {
           tenantId = identityParts[0];
         }
-        if (userId == null) {
+        if (isBlank(userId)) {
           userId = identityParts[1];
         }
       }
@@ -164,8 +164,11 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
   }
 
   private static URI tokenEndpoint(URI loginUrl) {
-    if (loginUrl == null || loginUrl.getScheme() == null || loginUrl.getHost() == null) {
-      throw new AuthenticationException("Salesforce login URL must be an absolute URL");
+    if (loginUrl == null
+        || !("http".equalsIgnoreCase(loginUrl.getScheme())
+            || "https".equalsIgnoreCase(loginUrl.getScheme()))
+        || loginUrl.getHost() == null) {
+      throw new AuthenticationException("Salesforce login URL must be an absolute HTTP(S) URL");
     }
     String path = loginUrl.getPath();
     if (path != null && path.endsWith(TOKEN_PATH)) {
@@ -214,6 +217,10 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       throw new AuthenticationException("Missing " + field);
     }
     return value.trim();
+  }
+
+  private static boolean isBlank(String value) {
+    return value == null || value.isBlank();
   }
 
   private static String firstValue(String json, String... names) {

@@ -84,7 +84,13 @@ public final class UserSuppliedAuthProvider implements SalesforceAuthProvider {
       return current;
     }
     synchronized (sessionLock) {
-      SalesforceSession supplied = requireSession(sessionSupplier.get());
+      SalesforceSession supplied;
+      try {
+        supplied = sessionSupplier.get();
+      } catch (RuntimeException exception) {
+        throw new AuthenticationException("Unable to obtain caller-supplied session");
+      }
+      supplied = requireSession(supplied);
       session.set(supplied);
       return supplied;
     }

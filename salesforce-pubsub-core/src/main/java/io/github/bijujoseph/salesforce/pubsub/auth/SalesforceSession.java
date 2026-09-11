@@ -22,8 +22,9 @@ import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
  * An immutable set of values required to make authenticated Salesforce Pub/Sub calls.
  *
  * <p>Tenant and user identifiers are optional because some OAuth grants do not return identity
- * information. Access tokens and instance URLs are always required. The token is deliberately
- * omitted from the string representation so a session can safely appear in diagnostics.
+ * information. Access tokens and instance URLs are always required. Credential-bearing values are
+ * deliberately omitted from the string representation so a session can safely appear in
+ * diagnostics.
  */
 public record SalesforceSession(
     String accessToken, String instanceUrl, String tenantId, String userId) {
@@ -37,8 +38,7 @@ public record SalesforceSession(
 
   @Override
   public String toString() {
-    return "SalesforceSession[accessToken=<redacted>, instanceUrl="
-        + instanceUrl
+    return "SalesforceSession[accessToken=<redacted>, instanceUrl=<redacted>"
         + ", tenantId="
         + redactedOptional(tenantId)
         + ", userId="

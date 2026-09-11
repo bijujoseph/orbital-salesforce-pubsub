@@ -87,6 +87,20 @@ class UserSuppliedAuthProviderTest {
         assertInstanceOf(AuthenticationException.class, failure.getCause());
     org.junit.jupiter.api.Assertions.assertFalse(
         authenticationException.getMessage().contains("secret-from-supplier"));
+
+    UserSuppliedAuthProvider authenticationFailureProvider =
+        new UserSuppliedAuthProvider(
+            () -> {
+              throw new AuthenticationException("secret-from-authentication-exception");
+            });
+    CompletionException authenticationFailure =
+        assertThrows(
+            CompletionException.class,
+            () -> authenticationFailureProvider.authenticate().toCompletableFuture().join());
+    AuthenticationException sanitizedFailure =
+        assertInstanceOf(AuthenticationException.class, authenticationFailure.getCause());
+    org.junit.jupiter.api.Assertions.assertFalse(
+        sanitizedFailure.getMessage().contains("secret-from-authentication-exception"));
   }
 
   @Test
@@ -115,11 +129,14 @@ class UserSuppliedAuthProviderTest {
     SalesforceSession session =
         new SalesforceSession(
             "secret-access-token",
-            "https://instance.example",
+            "https://diagnostic-user:diagnostic-password@instance.example?secret=query-secret",
             "tenant-credential",
             "user-credential");
     String text = session.toString();
     org.junit.jupiter.api.Assertions.assertFalse(text.contains("secret-access-token"));
+    org.junit.jupiter.api.Assertions.assertFalse(text.contains("diagnostic-user"));
+    org.junit.jupiter.api.Assertions.assertFalse(text.contains("diagnostic-password"));
+    org.junit.jupiter.api.Assertions.assertFalse(text.contains("query-secret"));
     org.junit.jupiter.api.Assertions.assertFalse(text.contains("tenant-credential"));
     org.junit.jupiter.api.Assertions.assertFalse(text.contains("user-credential"));
   }
