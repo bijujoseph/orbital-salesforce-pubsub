@@ -49,7 +49,7 @@ retry policy; report and diagnose them normally.
 ## Implementation workflow
 
 1. The orchestrator assigns one unblocked Ready work item to a dedicated Git
-   worktree and issue branch. Based on the dependency of work items, the orchestrator will assin the work to dedicated agents outlined below. 
+   worktree and issue branch. Based on the dependency of work items, the orchestrator will assign the work to dedicated agents outlined below.
 2. `coder` implements only that work item in the assigned worktree.
 3. `tester` defines expected-behavior cases from the assigned issue and
    canonical blueprint before reading the implementation, then independently
