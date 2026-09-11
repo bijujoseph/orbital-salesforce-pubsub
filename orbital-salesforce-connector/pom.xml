@@ -15,6 +15,10 @@
     <name>Orbital Salesforce Pub/Sub Connector</name>
     <description>OrbitalHQ adapter for the Salesforce Pub/Sub core</description>
 
+    <properties>
+        <detekt.skip>false</detekt.skip>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.github.bijujoseph</groupId>

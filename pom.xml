@@ -12,6 +12,13 @@
     <name>Orbital Salesforce Pub/Sub Connector</name>
     <description>Salesforce Pub/Sub API connector for OrbitalHQ</description>
     <url>https://github.com/bijujoseph/orbital-salesforce-pubsub</url>
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <properties>
         <java.version>21</java.version>
@@ -21,13 +28,28 @@
 
         <kotlin.version>2.0.21</kotlin.version>
         <slf4j.version>2.0.16</slf4j.version>
+        <!-- Detekt only applies to the Kotlin connector.  Java and POM-only
+             modules inherit the quality plugin but have no Kotlin source tree. -->
+        <detekt.skip>true</detekt.skip>
 
         <maven-clean-plugin.version>3.3.2</maven-clean-plugin.version>
         <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+        <maven-antrun-plugin.version>3.1.0</maven-antrun-plugin.version>
         <maven-install-plugin.version>3.1.3</maven-install-plugin.version>
         <maven-jar-plugin.version>3.4.2</maven-jar-plugin.version>
         <maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
         <maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
+
+        <!-- Quality gates are intentionally versioned here so local and CI builds
+             use the same tools.  Update these properties through Dependabot. -->
+        <spotless-maven-plugin.version>3.9.0</spotless-maven-plugin.version>
+        <google-java-format.version>1.28.0</google-java-format.version>
+        <ktlint.version>1.8.0</ktlint.version>
+        <detekt-maven-plugin.version>1.23.8</detekt-maven-plugin.version>
+        <spotbugs-maven-plugin.version>4.10.4.1</spotbugs-maven-plugin.version>
+        <jacoco-maven-plugin.version>0.8.14</jacoco-maven-plugin.version>
+        <dependency-check-maven.version>12.1.0</dependency-check-maven.version>
+        <license-maven-plugin.version>2.7.1</license-maven-plugin.version>
     </properties>
 
     <modules>
@@ -72,6 +94,11 @@
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-antrun-plugin</artifactId>
+                    <version>${maven-antrun-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-install-plugin</artifactId>
                     <version>${maven-install-plugin.version}</version>
                 </plugin>
@@ -90,7 +117,192 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
                 </plugin>
+
+                <plugin>
+                    <groupId>com.diffplug.spotless</groupId>
+                    <artifactId>spotless-maven-plugin</artifactId>
+                    <version>${spotless-maven-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>com.github.ozsie</groupId>
+                    <artifactId>detekt-maven-plugin</artifactId>
+                    <version>${detekt-maven-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>com.github.spotbugs</groupId>
+                    <artifactId>spotbugs-maven-plugin</artifactId>
+                    <version>${spotbugs-maven-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco-maven-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.owasp</groupId>
+                    <artifactId>dependency-check-maven</artifactId>
+                    <version>${dependency-check-maven.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>license-maven-plugin</artifactId>
+                    <version>${license-maven-plugin.version}</version>
+                </plugin>
             </plugins>
         </pluginManagement>
+
+        <plugins>
+            <!-- Google Java Format and ktlint are both applied to main and test
+                 sources.  The check is bound to verify so it is part of the
+                 normal Maven lifecycle and remains easy to run locally. -->
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+                <configuration>
+                    <java>
+                        <includes>
+                            <include>src/main/java/**/*.java</include>
+                            <include>src/test/java/**/*.java</include>
+                        </includes>
+                        <googleJavaFormat>
+                            <version>${google-java-format.version}</version>
+                        </googleJavaFormat>
+                        <removeUnusedImports/>
+                        <forbidWildcardImports/>
+                    </java>
+                    <kotlin>
+                        <includes>
+                            <include>src/main/kotlin/**/*.kt</include>
+                            <include>src/test/kotlin/**/*.kt</include>
+                        </includes>
+                        <ktlint>
+                            <version>${ktlint.version}</version>
+                        </ktlint>
+                    </kotlin>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>quality-formatting</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- The Maven wrapper around the official Detekt CLI provides a
+                 repeatable Kotlin analysis gate.  A checked-in config keeps the
+                 rule policy reviewable and avoids baselining new findings. -->
+            <plugin>
+                <groupId>com.github.ozsie</groupId>
+                <artifactId>detekt-maven-plugin</artifactId>
+                <configuration>
+                    <skip>${detekt.skip}</skip>
+                    <buildUponDefaultConfig>true</buildUponDefaultConfig>
+                    <input>${project.basedir}/src</input>
+                    <config>${maven.multiModuleProjectDirectory}/config/detekt/detekt.yml</config>
+                    <jvmTarget>${java.version}</jvmTarget>
+                    <report>xml:${project.build.directory}/reports/detekt.xml</report>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>quality-detekt</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- SpotBugs is configured at the high-confidence threshold.  The
+                 noClassOk setting is deliberate: the scaffold has no classes yet,
+                 while any future production classes are still analyzed and fail
+                 the build on high-confidence findings. -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>High</threshold>
+                    <failThreshold>High</failThreshold>
+                    <failOnError>true</failOnError>
+                    <noClassOk>true</noClassOk>
+                    <xmlOutput>true</xmlOutput>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>quality-spotbugs</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- The license check remains an aggregator-only gate. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>license-maven-plugin</artifactId>
+                <inherited>false</inherited>
+                <configuration>
+                    <acceptPomPackaging>true</acceptPomPackaging>
+                    <failOnMissing>true</failOnMissing>
+                    <failOnBlacklist>true</failOnBlacklist>
+                    <!-- Reactor artifacts are this project's own outputs, not
+                         third-party dependencies whose licenses need auditing. -->
+                    <excludedGroups>^io\.github\.bijujoseph$</excludedGroups>
+                    <addOutputDirectoryAsResourceDir>false</addOutputDirectoryAsResourceDir>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>quality-license-report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>aggregate-add-third-party</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
+
+    <profiles>
+        <!-- Dependency-Check is intentionally opt-in.  NVD updates are too
+             expensive for the normal verify lifecycle; the scheduled/manual
+             security workflow invokes this profile with a persistent cache. -->
+        <profile>
+            <id>dependency-check</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <inherited>false</inherited>
+                        <configuration>
+                            <failBuildOnCVSS>7.0</failBuildOnCVSS>
+                            <failOnError>true</failOnError>
+                            <failBuildOnUnusedSuppressionRule>true</failBuildOnUnusedSuppressionRule>
+                            <!-- Sonatype OSS Index now requires a separate
+                                 credential; NVD remains the blocking source and
+                                 this avoids unauthenticated 401 failures. -->
+                            <ossindexAnalyzerEnabled>false</ossindexAnalyzerEnabled>
+                            <suppressionFiles>
+                                <suppressionFile>
+                                    ${project.basedir}/config/security/dependency-check-suppressions.xml
+                                </suppressionFile>
+                            </suppressionFiles>
+                            <formats>
+                                <format>HTML</format>
+                                <format>JUNIT</format>
+                                <format>SARIF</format>
+                            </formats>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
