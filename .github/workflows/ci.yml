@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
@@ -65,7 +65,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
       - name: Review pull-request dependency changes
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@v5.0.0
