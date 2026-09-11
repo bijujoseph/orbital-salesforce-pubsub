@@ -1,4 +1,7 @@
 name: Copilot review labels
+concurrency:
+  group: copilot-labels-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 on:
   pull_request:
     types: [review_requested]
