@@ -32,13 +32,13 @@ jobs:
         id: detect-sources
         shell: bash
         run: |
-          source_file="$(find . -type f \( -name '*.java' -o -name '*.kt' \) \
+          source_file="$(find . -type f \( -name '*.java' -o -name '*.kt' -o -name '*.proto' \) \
             -not -path './.git/*' -not -path '*/target/*' -print -quit)"
           if [[ -n "$source_file" ]]; then
             echo "has_source=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_source=false" >> "$GITHUB_OUTPUT"
-            echo "No Java or Kotlin source files are present; CodeQL analysis is deferred until implementation begins."
+            echo "No Java, Kotlin, or protobuf source files are present; CodeQL analysis is deferred until implementation begins."
           fi
       - name: Initialize CodeQL
         if: steps.detect-sources.outputs.has_source == 'true'
