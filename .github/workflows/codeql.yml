@@ -32,7 +32,10 @@ jobs:
         id: detect-sources
         shell: bash
         run: |
-          source_file="$(find . -type f \( -name '*.java' -o -name '*.kt' -o -name '*.proto' \) \
+          # Maven generates Java from production protobuf inputs during compile,
+          # after CodeQL initialization, so detect those inputs as analyzable.
+          source_file="$(find . -type f \( -name '*.java' -o -name '*.kt' \
+            -o \( -name '*.proto' -path '*/src/main/proto/*' \) \) \
             -not -path './.git/*' -not -path '*/target/*' -print -quit)"
           if [[ -n "$source_file" ]]; then
             echo "has_source=true" >> "$GITHUB_OUTPUT"
