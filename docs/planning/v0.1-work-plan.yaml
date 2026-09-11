@@ -1,0 +1,2129 @@
+schema_version: "1.0"
+item_kind: "repository_issue"
+
+project:
+  owner: "bijujoseph"
+  repository: "bijujoseph/orbital-salesforce-pubsub"
+  project_number: 2
+  target_version: "0.1.0"
+
+approval:
+  approved: true
+  approved_by: "bijujoseph"
+  approved_at: "09/10/2026 9:27pm"
+
+defaults:
+  status: "Backlog"
+  priority: "P2"
+  target_version: "0.1.0"
+  agent_ready: "No"
+
+required_project_fields:
+  Status:
+    - Backlog
+    - Ready
+    - In Progress
+    - Ready for Review
+    - Blocked
+    - Done
+  ItemType:
+    - Epic
+    - Feature
+    - Task
+    - Test
+    - Documentation
+    - Chore
+    - Spike
+  Priority:
+    - P0
+    - P1
+    - P2
+    - P3
+  Area:
+    - Foundation
+    - Core
+    - Subscription
+    - Publish
+    - CLI
+    - Orbital Adapter
+    - Testing
+    - CI/CD
+    - Documentation
+    - Release
+  Phase:
+    - Phase 0
+    - Phase 1
+    - Phase 2
+    - Phase 3
+    - Phase 4
+  Size:
+    - XS
+    - S
+    - M
+    - L
+    - XL
+  Risk:
+    - Low
+    - Medium
+    - High
+  Target version:
+    - "0.1.0"
+    - Future
+  Agent-ready:
+    - "Yes"
+    - "No"
+
+issues:
+  - key: "OSP-001"
+    type: "Epic"
+    title: "Release Orbital Salesforce Pub/Sub Connector 0.1.0"
+    parent: null
+    depends_on: []
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Epic"
+      Priority: "P0"
+      Area: "Release"
+      Phase: "Phase 0"
+      Size: "XL"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-001 -->
+
+      ## Goal
+      Deliver a focused 0.1.0 library and OrbitalHQ connector that consumes and publishes Salesforce custom Platform Events through the Pub/Sub API.
+
+      ## Scope
+      Encompasses the reusable Java core, CLI, thin Kotlin Orbital adapter, verification, documentation, and signed Maven Central release; all explicit v0.1 non-goals remain excluded.
+
+      ## Requirement Sources
+      - Blueprint §§1-4, 13-15 define release scope, architecture, sequencing, and definition of done.
+
+      ## Implementation Notes
+      - Prove the Salesforce protocol through the CLI before adapter implementation, and do not claim exactly-once delivery.
+
+      ## Acceptance Criteria
+      - Every child Feature and its required work items is complete with its bounded verification evidence.
+      - Both Salesforce-to-Orbital Stream<T> consumption and Orbital-to-Salesforce unary publication pass the v0.1 acceptance suite.
+      - Release artifacts and documentation satisfy the blueprint definition of done without implementing any declared non-goal.
+
+      ## Verification
+      - Review child issue completion and the final release-readiness evidence in OSP-083.
+      - Run the complete Maven verification, integration, security, packaging, and release smoke checks defined by the completed child issues.
+
+      ## Risks / Constraints
+      - Real-org credentials and the supported Orbital SPI are external gates; delivery claims must remain limited to verified behavior.
+
+      ## Likely Modules / Files
+      - pom.xml and all Maven modules
+      - docs/
+      - .github/workflows/
+
+  - key: "OSP-010"
+    type: "Feature"
+    title: "Establish the repository and delivery baseline"
+    parent: "OSP-001"
+    depends_on: []
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Feature"
+      Priority: "P0"
+      Area: "Foundation"
+      Phase: "Phase 0"
+      Size: "L"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-010 -->
+
+      ## Goal
+      Create a reproducible Java 21 Maven foundation with generated Salesforce protocol types and enforceable quality gates.
+
+      ## Scope
+      Covers module bootstrap, build conventions, CI quality/security checks, and Pub/Sub proto generation only.
+
+      ## Requirement Sources
+      - Blueprint §§3-4, 11, and implementation order steps 1-3.
+      - Repository evidence: no build manifest or source/test tree exists; current CI skips Maven when no POM is found.
+
+      ## Implementation Notes
+      - Keep core free of Orbital, Taxi, and Spring dependencies and keep generated types internal to transport.
+
+      ## Acceptance Criteria
+      - OSP-011 through OSP-013 are complete and the root Maven reactor verifies on Java 21.
+      - Pull-request CI enforces the blueprint quality and security baseline on the bootstrapped reactor.
+
+      ## Verification
+      - Run `mvn -B -ntp verify` from the repository root and inspect required CI jobs.
+
+      ## Risks / Constraints
+      - Build tooling must not introduce a runtime or product outside the blueprint.
+
+      ## Likely Modules / Files
+      - pom.xml
+      - .github/workflows/
+      - salesforce-pubsub-core/
+      - salesforce-pubsub-cli/
+      - orbital-salesforce-connector/
+      - bom/
+
+  - key: "OSP-011"
+    type: "Chore"
+    title: "Bootstrap the Java 21 Maven multi-module reactor"
+    parent: "OSP-010"
+    depends_on: []
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Chore"
+      Priority: "P0"
+      Area: "Foundation"
+      Phase: "Phase 0"
+      Size: "M"
+      Risk: "Low"
+      Target version: "0.1.0"
+      Agent-ready: "Yes"
+    body: |
+      <!-- work-item-key: OSP-011 -->
+
+      ## Goal
+      Provide the compilable module and dependency boundary required for all connector work.
+
+      ## Scope
+      Create the root reactor plus core, CLI, Orbital adapter, BOM, examples, and required source/test directory scaffolds with the 0.1.0 coordinates.
+
+      ## Requirement Sources
+      - Blueprint §§3.1-3.2 and 4.1.
+      - Repository evidence: the current bootstrap has no POM or application/test source tree.
+
+      ## Implementation Notes
+      - Configure Java 21 and SLF4J logging; Kotlin is confined to the adapter, and the CLI depends on core rather than duplicating protocol code.
+
+      ## Acceptance Criteria
+      - The root reactor lists `salesforce-pubsub-core`, `salesforce-pubsub-cli`, `orbital-salesforce-connector`, `bom`, and `examples` and assigns the specified artifact IDs.
+      - `salesforce-pubsub-core` has no OrbitalHQ, Taxi, or Spring dependency in its effective POM.
+      - Modules that log compile against SLF4J, and the reusable core does not impose a concrete logging backend on embedding applications.
+      - A clean Java 21 build compiles every empty/scaffolded module and installs the BOM locally.
+
+      ## Verification
+      - Run `mvn -B -ntp clean verify` and inspect `mvn -pl salesforce-pubsub-core dependency:tree` for forbidden dependencies, the SLF4J API, and absence of a core runtime logging binding.
+
+      ## Risks / Constraints
+      - The actual organization segment in Maven coordinates must be selected consistently without exposing generated transport types as public API.
+
+      ## Likely Modules / Files
+      - pom.xml
+      - salesforce-pubsub-core/pom.xml
+      - salesforce-pubsub-cli/pom.xml
+      - orbital-salesforce-connector/pom.xml
+      - bom/pom.xml
+      - examples/pom.xml
+
+  - key: "OSP-012"
+    type: "Chore"
+    title: "Enforce formatting, analysis, coverage, and security checks"
+    parent: "OSP-010"
+    depends_on:
+      - "OSP-011"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Chore"
+      Priority: "P1"
+      Area: "CI/CD"
+      Phase: "Phase 0"
+      Size: "L"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-012 -->
+
+      ## Goal
+      Turn the blueprint quality, security, coverage, license, and packaging requirements into deterministic build and CI gates.
+
+      ## Scope
+      Configure Java/Kotlin formatting, Detekt, Java static analysis, JaCoCo, dependency/license checks, Gitleaks, CodeQL, documentation checks, and package smoke verification.
+
+      ## Requirement Sources
+      - Blueprint §§10.1 and 11.1-11.3.
+      - Repository evidence: current CI only validates the work plan and runs Maven verify when POMs exist; Dependabot is already configured for Maven.
+
+      ## Implementation Notes
+      - Apply the stated coverage thresholds, with the higher critical-package thresholds, and fail high-confidence security/correctness findings according to policy.
+
+      ## Acceptance Criteria
+      - Pull-request CI runs formatting, compilation, unit/fake/adapter tests, coverage, static analysis, dependency/license scanning, CodeQL, Gitleaks, package build, and artifact smoke checks.
+      - Gitleaks and CodeQL both run on pull requests and on a scheduled scan, with findings surfaced as failing or blocking security results under the configured policy.
+      - Core line/branch coverage gates are at least 80/70 percent and auth, replay, Avro, and state-machine gates are at least 90/85 percent.
+      - No committed secret fixture is required by any check, and high/critical dependency findings receive a blocking review outcome under the configured policy.
+
+      ## Verification
+      - Run `mvn -B -ntp verify` and inspect a pull-request workflow run for every required check and threshold.
+      - Inspect both pull-request and scheduled workflow runs for Gitleaks and CodeQL, and execute the configured secret, dependency, license, and code-security checks against a controlled failing fixture or documented test mode.
+
+      ## Risks / Constraints
+      - Tool selection may use only blueprint-approved equivalents and must keep CI usable without real Salesforce credentials on ordinary pull requests.
+
+      ## Likely Modules / Files
+      - pom.xml
+      - .github/workflows/ci.yml
+      - .github/workflows/codeql.yml
+      - .gitleaks.toml
+      - .github/dependabot.yml
+
+  - key: "OSP-013"
+    type: "Task"
+    title: "Generate internal Salesforce Pub/Sub gRPC stubs"
+    parent: "OSP-010"
+    depends_on:
+      - "OSP-012"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Core"
+      Phase: "Phase 0"
+      Size: "M"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-013 -->
+
+      ## Goal
+      Generate Java client types for the exact Pub/Sub API surface required by v0.1.
+
+      ## Scope
+      Add Maven protobuf/gRPC generation for `GetTopic`, `GetSchema`, `Subscribe`, and unary `Publish`; exclude ManagedSubscribe and PublishStream implementation.
+
+      ## Requirement Sources
+      - Blueprint §4.2 and implementation order step 3.
+
+      ## Implementation Notes
+      - Generated Salesforce classes remain transport implementation details and are not exported from stable core APIs.
+
+      ## Acceptance Criteria
+      - A clean Maven build deterministically generates and compiles stubs containing all four required RPCs.
+      - Public core API signatures contain no Salesforce-generated protobuf or gRPC types.
+      - No v0.1 runtime path invokes ManagedSubscribe, PublishStream, or batch publishing.
+
+      ## Verification
+      - Run `mvn -B -ntp -pl salesforce-pubsub-core clean verify` and an API-surface check for generated-package leakage.
+
+      ## Risks / Constraints
+      - Proto version changes can alter generated code; dependency and generation versions must be pinned or centrally managed.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/pom.xml
+      - salesforce-pubsub-core/src/main/proto/
+
+  - key: "OSP-020"
+    type: "Feature"
+    title: "Build the reusable Salesforce Pub/Sub core"
+    parent: "OSP-001"
+    depends_on:
+      - "OSP-010"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Feature"
+      Priority: "P0"
+      Area: "Core"
+      Phase: "Phase 0"
+      Size: "XL"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-020 -->
+
+      ## Goal
+      Provide an asynchronous, independently usable Java core for authentication, transport, schema resolution, Avro conversion, errors, and telemetry.
+
+      ## Scope
+      Covers the stable core boundary needed by subscription and publish flows, without OrbitalHQ dependencies.
+
+      ## Requirement Sources
+      - Blueprint §§2-5 and 9.
+
+      ## Implementation Notes
+      - Salesforce-generated types stay internal; public replay byte arrays are immutable by defensive copy or value wrapper.
+
+      ## Acceptance Criteria
+      - OSP-021 through OSP-026 are complete and the core can be consumed without OrbitalHQ, Taxi, or Spring.
+      - Required success, error, concurrency, redaction, cache, and codec behavior is covered by deterministic tests.
+
+      ## Verification
+      - Run `mvn -B -ntp -pl salesforce-pubsub-core verify` and inspect the published API/dependency surface.
+
+      ## Risks / Constraints
+      - Public API stability and secret redaction are release-critical.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/
+      - salesforce-pubsub-core/src/test/java/
+
+  - key: "OSP-021"
+    type: "Task"
+    title: "Implement typed configuration and authentication providers"
+    parent: "OSP-020"
+    depends_on:
+      - "OSP-013"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Core"
+      Phase: "Phase 0"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-021 -->
+
+      ## Goal
+      Validate connector configuration and supply current Salesforce sessions through the two v0.1 authentication modes.
+
+      ## Scope
+      Implement endpoint, flow-control, retry, and client configuration plus the authentication SPI, client-credentials provider, and caller-supplied session provider.
+
+      ## Requirement Sources
+      - Blueprint §§5.2-5.3, 6.8, 6.11, and implementation order steps 4-7.
+
+      ## Implementation Notes
+      - Use asynchronous APIs, validate missing token/instance URL, and serialize or coalesce concurrent refresh safely.
+
+      ## Acceptance Criteria
+      - Valid client-credentials acquisition and caller-supplied sessions produce a nonblank access token, instance URL, tenant ID, and user ID where supplied.
+      - Missing required values fail before transport use with typed configuration/authentication errors.
+      - Concurrent authentication or refresh does not expose a partially updated session or leak secrets in logs/exceptions.
+      - JWT, browser authorization-code, and username/password grants are not implemented.
+
+      ## Verification
+      - Run focused JUnit tests for both providers, invalid configuration, concurrent refresh, and captured-log redaction.
+
+      ## Risks / Constraints
+      - OAuth responses and errors may contain secrets; sanitization must occur before logging or exception construction.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/config/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/auth/
+
+  - key: "OSP-022"
+    type: "Task"
+    title: "Implement asynchronous gRPC transport and session metadata"
+    parent: "OSP-020"
+    depends_on:
+      - "OSP-013"
+      - "OSP-021"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Core"
+      Phase: "Phase 0"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-022 -->
+
+      ## Goal
+      Establish secure asynchronous HTTP/2 transport that attaches the current Salesforce session to each RPC.
+
+      ## Scope
+      Implement channel lifecycle, asynchronous stubs, transport abstraction, and CallCredentials or scoped interceptor metadata for `accesstoken`, `instanceurl`, and `tenantid`.
+
+      ## Requirement Sources
+      - Blueprint §§5.2 and 5.4.
+
+      ## Implementation Notes
+      - Read session metadata atomically for each new RPC and keep blocking replay stores off Orbital execution threads later.
+
+      ## Acceptance Criteria
+      - An in-process server receives all three required metadata values for each RPC.
+      - RPCs started after refresh receive refreshed values while concurrent calls never observe a mixed session.
+      - Access tokens, instance URLs used as credentials, tenant IDs, and auth headers are absent from ordinary logs and exception messages.
+      - Client close terminates channel resources without blocking an Orbital execution thread.
+
+      ## Verification
+      - Run focused metadata, refresh-concurrency, redaction, and channel-close tests against an in-process gRPC server.
+
+      ## Risks / Constraints
+      - Metadata must be scoped to Salesforce RPCs and must not be cached beyond session refresh.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/transport/
+      - salesforce-pubsub-core/src/test/java/io/github/*/salesforce/pubsub/transport/
+
+  - key: "OSP-023"
+    type: "Task"
+    title: "Implement topic validation, schema resolution, and bounded cache"
+    parent: "OSP-020"
+    depends_on:
+      - "OSP-022"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Core"
+      Phase: "Phase 0"
+      Size: "L"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-023 -->
+
+      ## Goal
+      Resolve and validate topics and schemas while bounding schema memory and remote calls.
+
+      ## Scope
+      Implement GetTopic, GetSchema, operation-specific capability checks, schema parsing, and the schema-ID cache.
+
+      ## Requirement Sources
+      - Blueprint §§5.5-5.6 and testing §10.2 topic/schema cases.
+
+      ## Implementation Notes
+      - Use schema ID as the cache key, maximum size 100, 24-hour expire-after-access, and expose hit/miss/load-failure/eviction telemetry.
+
+      ## Acceptance Criteria
+      - Unknown, non-subscribable, and non-publishable topics fail with the applicable typed error before Subscribe or Publish.
+      - The caller-supplied topic string is passed unchanged to GetTopic and subsequent Subscribe or Publish requests; invalid names are neither rewritten nor used to infer an object name.
+      - A cache miss performs GetSchema, a hit avoids it, and a new schema ID performs a separate lookup.
+      - The cache never exceeds 100 entries, expires idle entries after 24 hours, and a load failure does not poison later retries indefinitely.
+      - Observable schema-cache telemetry reports hits, misses, load failures, and evictions with the correct count for each exercised outcome.
+      - Missing required schema IDs and non-retriable schema failures are surfaced with safe context.
+
+      ## Verification
+      - Run in-process topic tests that record exact pass-through for valid and invalid sentinel names and assert no rewrite or object-name inference before failure.
+      - Run deterministic clock/cache tests and in-process GetTopic/GetSchema success, permission, timeout, failure, new-schema, and hit/miss/load-failure/eviction metric-count tests.
+
+      ## Risks / Constraints
+      - A schema ID is not treated as a permanent Taxi model version.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/schema/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/transport/
+
+  - key: "OSP-024"
+    type: "Task"
+    title: "Implement neutral event models and Avro codec"
+    parent: "OSP-020"
+    depends_on:
+      - "OSP-023"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Core"
+      Phase: "Phase 0"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-024 -->
+
+      ## Goal
+      Convert Salesforce Avro payloads to and from neutral Java values without exposing protocol-generated types.
+
+      ## Scope
+      Implement SalesforceEvent plus decode/encode support for all v0.1 scalar, logical, nullable, array, and nested-record cases.
+
+      ## Requirement Sources
+      - Blueprint §§5.7-5.8 and testing §10.2 Avro cases.
+
+      ## Implementation Notes
+      - Normalize Avro Utf8 to String and defensively copy or immutably wrap replay bytes at public boundaries.
+
+      ## Acceptance Criteria
+      - Round-trip tests cover strings, booleans, integers/longs, floating values, dates, timestamps, nulls, nullable unions, arrays, and nested records.
+      - Malformed/incompatible decode raises EventDecodeException; missing required or wrong-type encode raises EventEncodeException before network publication.
+      - Errors may include safe topic/schema/event/replay-hash context but never full raw payloads.
+      - When Salesforce supplies an event ID, the SalesforceEvent exposes that value as its default event identity; replay ID is never selected as the default identity.
+      - Replay IDs remain opaque bytes and are never incremented, numerically compared, synthesized, or used as event identity.
+
+      ## Verification
+      - Run parameterized Avro unit tests, mutation/defensive-copy tests, captured-error redaction assertions, and identity-selection tests with Salesforce event ID present and absent.
+
+      ## Risks / Constraints
+      - Base64 is permitted only at textual boundaries, not in the neutral core model.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/model/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/schema/
+
+  - key: "OSP-025"
+    type: "Task"
+    title: "Implement typed errors, lifecycle telemetry, and health"
+    parent: "OSP-020"
+    depends_on:
+      - "OSP-021"
+      - "OSP-022"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P1"
+      Area: "Core"
+      Phase: "Phase 0"
+      Size: "M"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-025 -->
+
+      ## Goal
+      Give embedders actionable typed failures and optional low-cardinality lifecycle observability.
+
+      ## Scope
+      Implement the blueprint exception hierarchy, telemetry SPI with no-op default, SLF4J structured logging/redaction, metrics hooks, and application-level connector status.
+
+      ## Requirement Sources
+      - Blueprint §§5.1, 9.1-9.4, and definition of done §14.
+
+      ## Implementation Notes
+      - Route core logs through SLF4J, map authentication and authorization separately, and treat raw gRPC channel state as diagnostic detail rather than the complete health state.
+
+      ## Acceptance Criteria
+      - Defined failure categories map to their corresponding typed exceptions and preserve only safe context.
+      - Core lifecycle and error logs are emitted through SLF4J at the blueprint-defined levels and can be bound by the embedding application without a core-imposed backend.
+      - The no-op telemetry implementation requires no metrics system and does not alter behavior.
+      - Health exposes STARTING, AUTHENTICATING, CONNECTED, SUBSCRIBED, RECONNECTING, DEGRADED, FAILED, and STOPPED according to connector lifecycle.
+      - Always-required metrics use only low-cardinality labels and no credential, payload, customer-ID, or PII values.
+
+      ## Verification
+      - Run exception-mapping, health-transition, telemetry/no-op, metric-label, and SLF4J capture tests that assert levels, safe context, redaction, and backend independence.
+
+      ## Risks / Constraints
+      - Checkpoint age and processing-duration metrics remain disabled until OSP-051 proves their semantics.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/error/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/telemetry/
+
+  - key: "OSP-026"
+    type: "Test"
+    title: "Complete the core unit-test contract"
+    parent: "OSP-020"
+    depends_on:
+      - "OSP-021"
+      - "OSP-022"
+      - "OSP-023"
+      - "OSP-024"
+      - "OSP-025"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Test"
+      Priority: "P0"
+      Area: "Testing"
+      Phase: "Phase 0"
+      Size: "M"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-026 -->
+
+      ## Goal
+      Close all deterministic unit-level coverage gaps in the reusable core before protocol orchestration proceeds.
+
+      ## Scope
+      Add or consolidate the authentication, metadata, topic/schema, cache, Avro, error, telemetry, and public-model test matrix.
+
+      ## Requirement Sources
+      - Blueprint §§10.1-10.2 and 11.1.
+
+      ## Implementation Notes
+      - Prefer observable behavior over implementation coupling; use controlled clocks and captured logging where needed.
+
+      ## Acceptance Criteria
+      - Every core case enumerated in blueprint §10.2 outside subscription/retry/publish has a passing automated assertion.
+      - Core coverage is at least 80 percent line and 70 percent branch, with auth and Avro at least 90/85 percent.
+      - The tests require no network access, real Salesforce credentials, or production data.
+
+      ## Verification
+      - Run `mvn -B -ntp -pl salesforce-pubsub-core test jacoco:check` and inspect package-level reports.
+
+      ## Risks / Constraints
+      - Coverage thresholds do not substitute for the later state-machine and protocol tests.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/test/java/
+      - salesforce-pubsub-core/pom.xml
+
+  - key: "OSP-030"
+    type: "Feature"
+    title: "Deliver bounded Platform Event subscriptions"
+    parent: "OSP-001"
+    depends_on:
+      - "OSP-020"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Feature"
+      Priority: "P0"
+      Area: "Subscription"
+      Phase: "Phase 1"
+      Size: "XL"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-030 -->
+
+      ## Goal
+      Consume custom Platform Events with deterministic replay, bounded demand, explicit lifecycle, reconnect, and cancellation behavior.
+
+      ## Scope
+      Covers core Subscribe only; ManagedSubscribe and unverified downstream acknowledgement semantics remain excluded.
+
+      ## Requirement Sources
+      - Blueprint §6, §§10.2-10.4 subscription cases, and definition of done §14.
+
+      ## Implementation Notes
+      - Preserve replay IDs as opaque bytes and prohibit all demand, emission, checkpoint writes, and reconnect scheduling after STOPPING.
+
+      ## Acceptance Criteria
+      - OSP-031 through OSP-036 are complete with deterministic success, failure, lifecycle, security, and compatibility verification.
+      - The public asynchronous subscription API supports LATEST, EARLIEST, and explicit replay while remaining independent of OrbitalHQ.
+
+      ## Verification
+      - Run the subscription unit/state-machine and in-process protocol suites referenced by child issues.
+
+      ## Risks / Constraints
+      - The connector must not claim exactly-once delivery or invent an acknowledgement boundary.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/subscription/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/replay/
+
+  - key: "OSP-031"
+    type: "Task"
+    title: "Implement replay models, store, and start precedence"
+    parent: "OSP-030"
+    depends_on:
+      - "OSP-024"
+      - "OSP-025"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Subscription"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-031 -->
+
+      ## Goal
+      Select subscription starts deterministically and persist opaque replay checkpoints behind a replaceable SPI.
+
+      ## Scope
+      Implement LATEST/EARLIEST/ReplayId models, SubscribeRequest, ReplayStore, InMemoryReplayStore, stable namespace, and replay-start selection.
+
+      ## Requirement Sources
+      - Blueprint §§6.1-6.6 and replay tests in §10.2.
+
+      ## Implementation Notes
+      - Precedence is explicit ReplayId, then `connectionName + topic + consumerName` checkpoint, then configured initial preset.
+
+      ## Acceptance Criteria
+      - Explicit ReplayId overrides both stored state and preset; stored state overrides preset; preset applies only when neither exists.
+      - InMemoryReplayStore keys by all three namespace components and copies replay bytes on load/save boundaries.
+      - Consumer names are accepted as stable caller configuration and are never randomly regenerated during resume.
+      - JDBC, DynamoDB, Redis, and HA durability claims are absent from v0.1.
+
+      ## Verification
+      - Run table-driven precedence, namespace-isolation, defensive-copy, LATEST, EARLIEST, and explicit-replay unit tests.
+
+      ## Risks / Constraints
+      - Replay IDs are stream positions, never event IDs, numeric offsets, or business keys.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/replay/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/subscription/
+
+  - key: "OSP-032"
+    type: "Task"
+    title: "Implement subscription state machine, flow control, and keepalives"
+    parent: "OSP-030"
+    depends_on:
+      - "OSP-031"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Subscription"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-032 -->
+
+      ## Goal
+      Bound subscription work and make every active, degraded, reconnecting, stopping, and terminal transition explicit.
+
+      ## Scope
+      Implement the state machine, validated FlowControlOptions, initial/refill demand accounting, max-in-flight enforcement, and keepalive handling.
+
+      ## Requirement Sources
+      - Blueprint §§6.8-6.10 and state/flow tests in §§10.2-10.4.
+
+      ## Implementation Notes
+      - Default request/refill/in-flight values are 10/2/10/20; keepalives update health but consume no event slot.
+
+      ## Acceptance Criteria
+      - Every legal blueprint transition succeeds and every illegal transition is rejected deterministically.
+      - Initial demand and threshold refills never cause in-flight events to exceed the configured maximum.
+      - Invalid flow-control combinations fail before opening a stream.
+      - Keepalives emit no business event, and STOPPING prevents later demand, event emission, replay writes, or reconnect scheduling.
+
+      ## Verification
+      - Run exhaustive state-transition tests and deterministic demand/refill, invalid-config, keepalive, and post-STOPPING assertions.
+
+      ## Risks / Constraints
+      - Flow control must not equate gRPC buffering capacity with downstream processing capacity.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/subscription/
+      - salesforce-pubsub-core/src/test/java/io/github/*/salesforce/pubsub/subscription/
+
+  - key: "OSP-033"
+    type: "Task"
+    title: "Implement Subscribe RPC orchestration and close semantics"
+    parent: "OSP-030"
+    depends_on:
+      - "OSP-022"
+      - "OSP-023"
+      - "OSP-024"
+      - "OSP-032"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Subscription"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-033 -->
+
+      ## Goal
+      Open and close Salesforce subscription streams through the stable core handler contract.
+
+      ## Scope
+      Validate GetTopic/can_subscribe, build Subscribe requests, decode ConsumerEvents, deliver handler/lifecycle/error callbacks, and close stream resources.
+
+      ## Requirement Sources
+      - Blueprint §§5.2, 5.5, 6.6-6.10, and Subscribe cases in §10.4.
+
+      ## Implementation Notes
+      - Event order is retained for one subscription; callback completion alone is not described as downstream acknowledgement.
+
+      ## Acceptance Criteria
+      - GetTopic succeeds before Subscribe and invalid/non-subscribable topics cause terminal typed failure without opening a stream.
+      - ConsumerEvents decode into SalesforceEvent in server order and keepalive responses emit no SalesforceEvent.
+      - Explicit close cancels the client stream, releases local buffers, stops demand, and reaches STOPPED rather than FAILED.
+      - Handler and lifecycle failures surface as typed subscription errors without raw payload or credential leakage.
+
+      ## Verification
+      - Run in-process ordered-event, keepalive, invalid-topic, handler-failure, explicit-close, and resource-leak tests.
+
+      ## Risks / Constraints
+      - No blocking network work may execute on a caller or future Orbital execution thread.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/subscription/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/transport/
+
+  - key: "OSP-034"
+    type: "Task"
+    title: "Implement invalid-replay policy"
+    parent: "OSP-030"
+    depends_on:
+      - "OSP-031"
+      - "OSP-033"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Subscription"
+      Phase: "Phase 1"
+      Size: "M"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-034 -->
+
+      ## Goal
+      Prevent silent data loss or unexpected replay when Salesforce rejects a replay position.
+
+      ## Scope
+      Map invalid-replay responses and apply ERROR, EARLIEST, or LATEST exactly as explicitly configured, with ERROR as default.
+
+      ## Requirement Sources
+      - Blueprint §§6.4 and 6.11 plus replay tests in §§10.2, 10.4, and 10.7.
+
+      ## Implementation Notes
+      - Only INVALID_ARGUMENT identified as invalid replay uses this policy; permission, topic, and configuration failures stay terminal.
+
+      ## Acceptance Criteria
+      - Default ERROR raises InvalidReplayException and sends no fallback subscription request.
+      - Explicit EARLIEST or LATEST sends exactly that fallback and records a lifecycle/telemetry event describing the reset.
+      - Invalid replay never silently changes policy, advances replay bytes, or retries forever.
+
+      ## Verification
+      - Run in-process invalid-replay tests for all three policies and assert request count, preset, typed error, and log redaction.
+
+      ## Risks / Constraints
+      - Recovery resets can lose or duplicate events and therefore require explicit configuration.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/replay/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/subscription/
+
+  - key: "OSP-035"
+    type: "Task"
+    title: "Implement reconnect, backoff, and session refresh"
+    parent: "OSP-030"
+    depends_on:
+      - "OSP-021"
+      - "OSP-022"
+      - "OSP-033"
+      - "OSP-034"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Subscription"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-035 -->
+
+      ## Goal
+      Recover boundedly from transient transport and authentication failures while terminating permanent failures.
+
+      ## Scope
+      Implement exponential backoff with jitter, configurable attempts/max delay, UNAVAILABLE reconnect, UNAUTHENTICATED reauthentication, and terminal error classification.
+
+      ## Requirement Sources
+      - Blueprint §6.11 and retry/reconnect tests in §§10.2, 10.4, and 10.7.
+
+      ## Implementation Notes
+      - Initial delays follow 1, 2, 4, 8, 16, then 30 seconds maximum before jitter; resume uses the configured replay strategy.
+
+      ## Acceptance Criteria
+      - UNAVAILABLE schedules jittered exponential retries that respect configured attempt and maximum-delay limits.
+      - UNAUTHENTICATED refreshes/reacquires the session, opens a new stream with refreshed metadata, and resumes from the intended replay selection.
+      - PERMISSION_DENIED, invalid topic, and invalid configuration terminate without an unbounded retry loop.
+      - Close/STOPPING cancels every scheduled reconnect and prevents later channel or stream creation.
+
+      ## Verification
+      - Run virtual-time retry tests plus in-process disconnect, token-invalidation, terminal-permission, resume, and close-race tests.
+
+      ## Risks / Constraints
+      - Concurrent failures must not trigger unsafe refresh storms or duplicate active subscriptions.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/subscription/
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/auth/
+
+  - key: "OSP-036"
+    type: "Test"
+    title: "Complete subscription state, replay, and resilience tests"
+    parent: "OSP-030"
+    depends_on:
+      - "OSP-031"
+      - "OSP-032"
+      - "OSP-033"
+      - "OSP-034"
+      - "OSP-035"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Test"
+      Priority: "P0"
+      Area: "Testing"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-036 -->
+
+      ## Goal
+      Demonstrate every specified subscription invariant under deterministic unit and in-process failure scenarios.
+
+      ## Scope
+      Close gaps across replay precedence, state transitions, flow control, keepalives, ordering, invalid replay, reconnect, refresh, cancellation, and redaction.
+
+      ## Requirement Sources
+      - Blueprint §§10.2-10.4 and quality thresholds in §11.1.
+
+      ## Implementation Notes
+      - Use generated stubs and controlled schedulers; do not require a real Salesforce org in pull-request checks.
+
+      ## Acceptance Criteria
+      - Every subscription/replay/flow/retry/state-machine case enumerated in blueprint §§10.2-10.4 has an automated assertion.
+      - Replay and subscription-state packages meet at least 90 percent line and 85 percent branch coverage.
+      - Tests prove no demand, emission, replay write, reconnect, or resource leak occurs after STOPPING/cancellation.
+
+      ## Verification
+      - Run `mvn -B -ntp -pl salesforce-pubsub-core test jacoco:check` and the in-process subscription suite repeatedly under leak/race detection.
+
+      ## Risks / Constraints
+      - Deterministic tests cannot replace the separately gated real-org validation.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/test/java/io/github/*/salesforce/pubsub/subscription/
+      - salesforce-pubsub-core/src/test/java/io/github/*/salesforce/pubsub/replay/
+
+  - key: "OSP-040"
+    type: "Feature"
+    title: "Publish events and prove the standalone CLI"
+    parent: "OSP-001"
+    depends_on:
+      - "OSP-020"
+      - "OSP-030"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Feature"
+      Priority: "P0"
+      Area: "Publish"
+      Phase: "Phase 1"
+      Size: "XL"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-040 -->
+
+      ## Goal
+      Publish one custom Platform Event at a time and prove subscribe/publish behavior independently through the CLI.
+
+      ## Scope
+      Covers unary Publish, four CLI protocol commands, Base64 custom replay, and non-production-org protocol validation; excludes streaming/batch publish.
+
+      ## Requirement Sources
+      - Blueprint §7, implementation order steps 25-30, and definition of done §14.
+
+      ## Implementation Notes
+      - A returned receipt always means success; Salesforce result errors raise PublishException.
+
+      ## Acceptance Criteria
+      - OSP-041 through OSP-043 and protocol-first fake-gRPC suite OSP-061 are complete, and real Salesforce GetTopic/GetSchema/Subscribe/Publish behavior is recorded.
+      - The CLI delegates all protocol behavior to core and supports explicit custom replay only as Base64 input.
+
+      ## Verification
+      - Run unit/in-process publish tests, CLI command tests, and the gated non-production-org smoke procedure.
+
+      ## Risks / Constraints
+      - Real-org validation depends on isolated credentials and event retention; it must never use production tenant secrets.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/publish/
+      - salesforce-pubsub-cli/
+
+  - key: "OSP-041"
+    type: "Task"
+    title: "Implement unary Platform Event publishing"
+    parent: "OSP-040"
+    depends_on:
+      - "OSP-022"
+      - "OSP-023"
+      - "OSP-024"
+      - "OSP-025"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Publish"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-041 -->
+
+      ## Goal
+      Publish a validated single custom Platform Event and return an unambiguous success receipt.
+
+      ## Scope
+      Implement PublishRequest/Receipt and GetTopic, can_publish, schema, Avro encoding, ProducerEvent, unary Publish, and result validation flow.
+
+      ## Requirement Sources
+      - Blueprint §§7.1-7.3 and publish tests in §§10.2 and 10.4.
+
+      ## Implementation Notes
+      - Preserve a caller correlation key or generate a UUID; it is tracing correlation rather than Salesforce event identity.
+
+      ## Acceptance Criteria
+      - GetTopic/can_publish and outgoing-value validation complete before the Publish RPC.
+      - A successful single result returns topic, correlation key, replay bytes, schema ID, and RPC ID as available.
+      - A Salesforce result error raises PublishException and never returns a receipt containing a failure list.
+      - PublishStream, batches, and a stable batch API are absent from v0.1.
+
+      ## Verification
+      - Run in-process success, generated/caller correlation, invalid topic/schema/value, Salesforce-result-error, and redaction tests.
+
+      ## Risks / Constraints
+      - Publish errors and payload validation must not expose full event payloads or credentials.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/main/java/io/github/*/salesforce/pubsub/publish/
+      - salesforce-pubsub-core/src/test/java/io/github/*/salesforce/pubsub/publish/
+
+  - key: "OSP-042"
+    type: "Task"
+    title: "Implement standalone Pub/Sub CLI commands"
+    parent: "OSP-040"
+    depends_on:
+      - "OSP-033"
+      - "OSP-035"
+      - "OSP-041"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "CLI"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-042 -->
+
+      ## Goal
+      Expose core GetTopic, GetSchema, Subscribe, and Publish behavior for protocol-first validation and diagnostics.
+
+      ## Scope
+      Implement CLI configuration/auth wiring, the four commands, LATEST/EARLIEST, and `--replay-id <base64>` custom replay.
+
+      ## Requirement Sources
+      - Blueprint design principle 10 in §2, §6.3, and implementation order steps 26-27.
+
+      ## Implementation Notes
+      - The CLI reuses core; any file replay store is optional, single-process only, and cannot be described as HA production storage.
+
+      ## Acceptance Criteria
+      - Each command invokes the matching core API and reports typed failures with a nonzero exit status and no credential/raw-payload leakage.
+      - Subscribe accepts LATEST, EARLIEST, and valid Base64 custom replay; malformed Base64 fails before network access.
+      - Publish accepts one event only and emits a success receipt or a terminal error, never a batch-like partial result.
+
+      ## Verification
+      - Run CLI parser/exit-code tests and in-process end-to-end command tests for all commands and replay modes.
+
+      ## Risks / Constraints
+      - Custom replay is a textual CLI boundary only and remains opaque bytes in core.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-cli/src/main/java/
+      - salesforce-pubsub-cli/src/test/java/
+
+  - key: "OSP-043"
+    type: "Test"
+    title: "Validate core and CLI against a non-production Salesforce org"
+    parent: "OSP-040"
+    depends_on:
+      - "OSP-026"
+      - "OSP-036"
+      - "OSP-042"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Test"
+      Priority: "P0"
+      Area: "Testing"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-043 -->
+
+      ## Goal
+      Prove the standalone protocol implementation before any Orbital adapter construction.
+
+      ## Scope
+      Run client-credentials where supported, caller-session, GetTopic, GetSchema, subscribe, publish, replay, schema-change, reconnect, and refresh smoke cases in an isolated org.
+
+      ## Requirement Sources
+      - Blueprint §§10.6-10.7, implementation order step 28, and design principle 10 in §2.
+
+      ## Implementation Notes
+      - Use `/event/Manual_Message__e` or an isolated equivalent and record validated org/API conditions without claiming broader edition compatibility.
+
+      ## Acceptance Criteria
+      - GetTopic/GetSchema, LATEST/EARLIEST subscribe, unary publish, and both supported authentication modes pass in the documented test org.
+      - Custom replay and stored-checkpoint precedence pass where retention permits; any retention limitation is recorded without weakening ERROR behavior.
+      - Schema-ID change, transient reconnect, and session refresh pass where practical, with reproducible evidence and no secret exposure.
+
+      ## Verification
+      - Execute the gated real-org test profile and retain sanitized results containing test event IDs, timestamps, and outcomes but no credentials or payload secrets.
+
+      ## Risks / Constraints
+      - This test must not run on ordinary pull requests and must use dedicated, rotated non-production credentials.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-cli/src/test/
+      - salesforce-pubsub-core/src/test/
+      - docs/operations.md
+
+  - key: "OSP-050"
+    type: "Feature"
+    title: "Integrate the thin OrbitalHQ adapter"
+    parent: "OSP-001"
+    depends_on:
+      - "OSP-040"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Feature"
+      Priority: "P0"
+      Area: "Orbital Adapter"
+      Phase: "Phase 2"
+      Size: "XL"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-050 -->
+
+      ## Goal
+      Expose Salesforce subscription and publication through the supported Orbital release without moving protocol logic into the adapter.
+
+      ## Scope
+      Covers the mandatory source-SPI investigation, Taxi declaration/configuration, OperationInvoker, mapping, stream lifecycle, and observability bridge.
+
+      ## Requirement Sources
+      - Blueprint §8, mandatory stop condition §13.1, and definition of done §14.
+
+      ## Implementation Notes
+      - No implementation or checkpoint claim may bypass OSP-051; all Orbital/Taxi imports remain in this module.
+
+      ## Acceptance Criteria
+      - OSP-051 completes with a supported released Orbital version and an explicit implementable delivery/checkpoint contract.
+      - OSP-052 through OSP-056 implement and verify only the behavior permitted by that contract.
+      - Subscribe returns Stream<T>, publish is an explicit write, and cancellation leaves no orphan Salesforce subscription.
+
+      ## Verification
+      - Review the spike report and run the adapter declaration, mapping, routing, lifecycle, and telemetry test suites.
+
+      ## Risks / Constraints
+      - Absence of downstream-success acknowledgement requires narrower documented checkpoint semantics, not a fabricated API.
+
+      ## Likely Modules / Files
+      - orbital-salesforce-connector/src/main/kotlin/
+      - orbital-salesforce-connector/src/test/kotlin/
+
+  - key: "OSP-060"
+    type: "Feature"
+    title: "Verify protocol and Orbital behavior end to end"
+    parent: "OSP-001"
+    depends_on:
+      - "OSP-030"
+      - "OSP-040"
+      - "OSP-050"
+      - "OSP-061"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Feature"
+      Priority: "P0"
+      Area: "Testing"
+      Phase: "Phase 3"
+      Size: "XL"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-060 -->
+
+      ## Goal
+      Prove core protocol invariants, adapter contracts, and both v0.1 user journeys in deterministic and real environments.
+
+      ## Scope
+      Consumes the protocol-first fake-server evidence from OSP-061 and covers the complete adapter/local smoke suite plus gated real Salesforce-to-Orbital acceptance tests.
+
+      ## Requirement Sources
+      - Blueprint §10 and definition of done §14.
+
+      ## Implementation Notes
+      - Fast checks run on pull requests; real-org tests run only on protected/scheduled infrastructure with isolated credentials.
+
+      ## Acceptance Criteria
+      - OSP-062 and OSP-063 pass after the protocol-first OSP-061 suite and cover every Orbital and real-environment v0.1 acceptance flow.
+      - Test evidence distinguishes fake protocol behavior, local Orbital behavior, and real-org compatibility claims.
+
+      ## Verification
+      - Run all Maven test profiles and inspect sanitized real-environment results for the documented supported versions.
+
+      ## Risks / Constraints
+      - External-system instability cannot be hidden by weakening deterministic or real-environment assertions.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/test/
+      - orbital-salesforce-connector/src/test/
+      - examples/
+      - .github/workflows/
+
+  - key: "OSP-061"
+    type: "Test"
+    title: "Build the complete in-process Pub/Sub protocol suite"
+    parent: "OSP-040"
+    depends_on:
+      - "OSP-026"
+      - "OSP-036"
+      - "OSP-041"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Test"
+      Priority: "P0"
+      Area: "Testing"
+      Phase: "Phase 1"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-061 -->
+
+      ## Goal
+      Exercise complete wire-level request ordering, metadata, schema, replay, subscription, reconnect, cancellation, and publish behavior without external credentials.
+
+      ## Scope
+      Provide a reusable in-process fake Salesforce gRPC server based on generated stubs and the full blueprint fake-server matrix.
+
+      ## Requirement Sources
+      - Blueprint §§10.1 and 10.4 plus implementation order step 30, before the Orbital SPI investigation at step 31.
+
+      ## Implementation Notes
+      - The fake records requests and supports scripted responses, stream interruption, token invalidation, invalid replay, keepalives, and publish errors.
+
+      ## Acceptance Criteria
+      - Tests prove required metadata, GetTopic-before-operation, one GetSchema per uncached ID, Avro decode/encode, demand counts, ordering, and keepalive suppression.
+      - Tests prove interruption reconnect, token refresh, all replay starts/policies, cancellation shutdown, expected ProducerEvent, and PublishException on result error.
+      - The suite is deterministic, parallel-safe, and requires no network or Salesforce credential.
+
+      ## Verification
+      - Run the fake-server suite repeatedly and in parallel under the pull-request Maven profile; inspect recorded RPC order and resource-leak assertions.
+
+      ## Risks / Constraints
+      - Fake behavior must reflect generated proto contracts but does not authorize broader Salesforce compatibility claims.
+
+      ## Likely Modules / Files
+      - salesforce-pubsub-core/src/test/java/
+      - salesforce-pubsub-core/src/test/resources/
+
+  - key: "OSP-062"
+    type: "Test"
+    title: "Complete Orbital adapter tests and local smoke environment"
+    parent: "OSP-060"
+    depends_on:
+      - "OSP-052"
+      - "OSP-053"
+      - "OSP-054"
+      - "OSP-055"
+      - "OSP-056"
+      - "OSP-061"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Test"
+      Priority: "P0"
+      Area: "Testing"
+      Phase: "Phase 3"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-062 -->
+
+      ## Goal
+      Verify declarations, mappings, routing, lifecycle, and a reproducible fake-Salesforce subscribe/publish flow in a local Orbital environment.
+
+      ## Scope
+      Complete the blueprint adapter test matrix and add a sample Taxi project/local smoke harness for the supported Orbital release.
+
+      ## Requirement Sources
+      - Blueprint §§10.1, 10.5, 11.2 main-branch pipeline, and implementation order steps 39 and 42.
+
+      ## Implementation Notes
+      - Tests use the OSP-051 delivery/cancellation contract and load samples without committing credentials.
+
+      ## Acceptance Criteria
+      - Every declaration-validation and TypedInstance/metadata/receipt mapping case in blueprint §10.5 has an automated assertion.
+      - Cancellation stops demand and gRPC work, releases all adapter resources, and reports STOPPED; checkpoint assertions match OSP-051 exactly.
+      - The local smoke environment loads a sample Taxi project, receives a fake Salesforce event as Stream<T>, and publishes a typed event back to the fake server.
+      - Main-branch CI starts the reproducible local Orbital smoke environment, loads the sample Taxi project, and runs both fake-Salesforce subscribe and publish connector smoke tests.
+
+      ## Verification
+      - Run the adapter Maven test profile and one documented local smoke command from a clean checkout with no Salesforce credentials.
+      - Inspect a main-branch CI run and its logs/artifacts to confirm Orbital startup, Taxi sample loading, fake subscribe receipt/mapping, and fake publish payload verification all completed successfully.
+
+      ## Risks / Constraints
+      - The smoke environment must pin/document a released Orbital version and must not become a new container distribution requirement.
+
+      ## Likely Modules / Files
+      - orbital-salesforce-connector/src/test/kotlin/
+      - examples/
+      - .github/workflows/ci.yml
+
+  - key: "OSP-063"
+    type: "Test"
+    title: "Run real Salesforce and Orbital v0.1 acceptance tests"
+    parent: "OSP-060"
+    depends_on:
+      - "OSP-043"
+      - "OSP-062"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Test"
+      Priority: "P0"
+      Area: "Testing"
+      Phase: "Phase 3"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-063 -->
+
+      ## Goal
+      Validate the released-version Orbital adapter against a dedicated non-production Salesforce org for both connector directions and resilience cases.
+
+      ## Scope
+      Run subscribe, publish, replay, reconnect, auth refresh, schema evolution, cancellation, and mapping acceptance scenarios through Orbital.
+
+      ## Requirement Sources
+      - Blueprint §§10.6-10.7, implementation order steps 40-41, and definition of done §14.
+
+      ## Implementation Notes
+      - Use isolated event names and dedicated rotated secrets; document only the org/API and Orbital versions actually validated.
+
+      ## Acceptance Criteria
+      - Salesforce publication reaches Orbital Stream<ManualMessageEvent> with Payload__c mapped, and an Orbital write produces the expected Salesforce event payload.
+      - LATEST/EARLIEST, custom core/CLI replay, checkpoint precedence, invalid ERROR, transient reconnect, auth refresh, and new-schema-ID behavior pass as applicable.
+      - Orbital cancellation closes Salesforce gRPC and sends no later demand; sanitized evidence confirms no credential or sensitive payload exposure.
+      - Compatibility statements name only the tested Salesforce conditions and released Orbital version.
+
+      ## Verification
+      - Run the protected real-org profile and retain sanitized timestamps, event IDs, replay hashes, request/cancellation evidence, and pass/fail outcomes.
+
+      ## Risks / Constraints
+      - No production tenant secret may be used, and org retention may constrain custom replay without changing the product rule.
+
+      ## Likely Modules / Files
+      - orbital-salesforce-connector/src/test/
+      - examples/
+      - docs/operations.md
+
+  - key: "OSP-070"
+    type: "Feature"
+    title: "Document integration and operating contracts"
+    parent: "OSP-001"
+    depends_on:
+      - "OSP-050"
+      - "OSP-060"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Feature"
+      Priority: "P1"
+      Area: "Documentation"
+      Phase: "Phase 3"
+      Size: "L"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-070 -->
+
+      ## Goal
+      Give library and Orbital users complete, truthful setup, usage, replay, delivery, operations, and troubleshooting guidance.
+
+      ## Scope
+      Covers architecture/configuration/replay/operations/troubleshooting documents and the complete Orbital-first README quick start.
+
+      ## Requirement Sources
+      - Blueprint §12 and documentation entries in §§3.1 and 14.
+
+      ## Implementation Notes
+      - Delivery/checkpoint and compatibility language must match OSP-051 and OSP-063 evidence.
+
+      ## Acceptance Criteria
+      - OSP-071 and OSP-072 cover every required README/documentation topic and pass link/snippet validation.
+      - Documentation states all operational limitations and v0.1 non-goals without promising exactly-once delivery.
+
+      ## Verification
+      - Run Markdown/link/snippet checks and perform the quick start from a clean environment using documented inputs.
+
+      ## Risks / Constraints
+      - Documentation cannot infer untested Salesforce editions or Orbital versions.
+
+      ## Likely Modules / Files
+      - README.md
+      - docs/
+      - examples/
+
+  - key: "OSP-071"
+    type: "Documentation"
+    title: "Write architecture, configuration, replay, operations, and troubleshooting guides"
+    parent: "OSP-070"
+    depends_on:
+      - "OSP-051"
+      - "OSP-055"
+      - "OSP-056"
+      - "OSP-063"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Documentation"
+      Priority: "P1"
+      Area: "Documentation"
+      Phase: "Phase 3"
+      Size: "L"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-071 -->
+
+      ## Goal
+      Explain the two-layer architecture and the exact configuration, replay, delivery, lifecycle, observability, and failure contracts needed to operate the connector.
+
+      ## Scope
+      Complete architecture.md, configuration.md, replay-and-delivery.md, operations.md, and troubleshooting.md, including the required symptom/cause/action table.
+
+      ## Requirement Sources
+      - Blueprint §§3, 5-9, 12.2-12.3, and OSP-051 verified SPI evidence.
+
+      ## Implementation Notes
+      - State Pub/Sub API rather than CometD, opaque replay IDs, precedence, ERROR default, custom replay boundary, capacity use, cancellation, and no exactly-once claim.
+
+      ## Acceptance Criteria
+      - Configuration guidance keeps secrets outside Taxi and covers both supported auth modes, endpoint, retry, flow, and gRPC settings.
+      - Replay/delivery guidance precisely states explicit replay, stored checkpoint, preset precedence and the OSP-051-supported checkpoint boundary.
+      - Operations covers health, metrics, safe logs, deliberate subscription capacity, shutdown, credential rotation, and gated real-org tests.
+      - Troubleshooting includes every required blueprint symptom, likely cause, and action without displaying credentials or raw payloads.
+
+      ## Verification
+      - Run Markdown/link/snippet validation and review each operational statement/troubleshooting row against the implementation and sanitized acceptance evidence.
+
+      ## Risks / Constraints
+      - Any implementation/documentation disagreement is a release blocker and must not be resolved by softening the blueprint.
+
+      ## Likely Modules / Files
+      - docs/architecture.md
+      - docs/configuration.md
+      - docs/replay-and-delivery.md
+      - docs/operations.md
+      - docs/troubleshooting.md
+
+  - key: "OSP-072"
+    type: "Documentation"
+    title: "Deliver the Orbital-first README and examples"
+    parent: "OSP-070"
+    depends_on:
+      - "OSP-062"
+      - "OSP-063"
+      - "OSP-071"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Documentation"
+      Priority: "P1"
+      Area: "Documentation"
+      Phase: "Phase 3"
+      Size: "L"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-072 -->
+
+      ## Goal
+      Let an Orbital user install, configure, subscribe, publish, and understand limitations from one verified starting point.
+
+      ## Scope
+      Rewrite README content and executable/sample config/Taxi examples for all blueprint-required topics and the nine-step quick start.
+
+      ## Requirement Sources
+      - Blueprint §§4.3 and 12-12.2.
+
+      ## Implementation Notes
+      - Include the exact short community-project disclaimer required by the blueprint and a compatibility matrix limited to versions/conditions validated by OSP-063.
+
+      ## Acceptance Criteria
+      - README contains every topic enumerated in blueprint §12, Maven coordinates, Salesforce prerequisites, supported auth, subscribe/publish examples, development/testing/security guidance, and known limitations.
+      - A clean user can add the artifact, configure named connection/secrets, declare semantic Taxi types plus subscribe/write operations, receive and publish a test event, and find replay/cancellation/delivery limitations.
+      - README explicitly requires Salesforce Pub/Sub API availability and required principal permissions and contains exactly: `This is a community project and is not affiliated with or endorsed by Salesforce or OrbitalHQ.`
+      - Examples contain no real credential, sensitive payload, unsupported raw Taxi replay token, downstream sink, or unvalidated compatibility claim.
+
+      ## Verification
+      - Execute the documented quick start against the local smoke environment and rerun Markdown/link/snippet and secret scans.
+
+      ## Risks / Constraints
+      - Examples must not imply a connection UI wizard, schema auto-generation, downstream integrations, or exactly-once behavior.
+
+      ## Likely Modules / Files
+      - README.md
+      - examples/
+      - docs/configuration.md
+
+  - key: "OSP-080"
+    type: "Feature"
+    title: "Prepare and publish the 0.1.0 release"
+    parent: "OSP-001"
+    depends_on:
+      - "OSP-010"
+      - "OSP-060"
+      - "OSP-070"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Feature"
+      Priority: "P0"
+      Area: "Release"
+      Phase: "Phase 4"
+      Size: "XL"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-080 -->
+
+      ## Goal
+      Publish signed, verifiable, documented 0.1.0 artifacts to Maven Central with open-source and supply-chain hygiene.
+
+      ## Scope
+      Covers community/security files, BOM and Central publishing, release checks, SBOM/provenance, changelog/release notes, tag, and GitHub release.
+
+      ## Requirement Sources
+      - Blueprint §§3.2, 11.2-11.3, implementation order step 44, and definition of done §14.
+
+      ## Implementation Notes
+      - Snapshot publication is optional; the 0.1.0 Maven Central release and signed artifacts are required.
+
+      ## Acceptance Criteria
+      - OSP-081 through OSP-083 are complete and all release gates pass on the exact release commit.
+      - Central artifacts, checksums, signatures, SBOM, release notes, and documented compatibility are mutually consistent.
+
+      ## Verification
+      - Run the protected release pipeline and independently consume the staged/released BOM, core, CLI, and connector artifacts.
+
+      ## Risks / Constraints
+      - Release credentials, signing material, and non-production-org secrets must remain protected and absent from logs/artifacts.
+
+      ## Likely Modules / Files
+      - pom.xml
+      - bom/pom.xml
+      - .github/workflows/
+      - CHANGELOG.md
+
+  - key: "OSP-081"
+    type: "Chore"
+    title: "Complete open-source governance and security hygiene"
+    parent: "OSP-080"
+    depends_on:
+      - "OSP-012"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Chore"
+      Priority: "P1"
+      Area: "Release"
+      Phase: "Phase 4"
+      Size: "M"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-081 -->
+
+      ## Goal
+      Provide the policy, contribution, disclosure, change, and collaboration files expected for the community release.
+
+      ## Scope
+      Add/complete NOTICE, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, issue templates, PR template, and ADR conventions while retaining Apache-2.0 licensing.
+
+      ## Requirement Sources
+      - Blueprint §§3.1 and 11.3.
+      - Repository evidence: LICENSE exists, while the other named community/release files and templates are absent.
+
+      ## Implementation Notes
+      - Security guidance includes private reporting and dedicated test-org credential rotation without embedding actual contacts/secrets unless repository policy supplies them.
+
+      ## Acceptance Criteria
+      - Every blueprint-required governance/security file and issue/PR template exists, is internally consistent, and references Apache-2.0 licensing correctly.
+      - SECURITY documents vulnerability reporting and test-credential rotation without publishing secrets.
+      - CHANGELOG has an explicit 0.1.0 section ready for final verified changes, and ADR guidance captures architecture decisions without copying the private blueprint.
+
+      ## Verification
+      - Run license-header, Markdown/link, template, and secret scans and manually review the disclosure path and rotation procedure.
+
+      ## Risks / Constraints
+      - The ignored canonical blueprint and substantial verbatim excerpts must never be published.
+
+      ## Likely Modules / Files
+      - NOTICE
+      - CONTRIBUTING.md
+      - SECURITY.md
+      - CODE_OF_CONDUCT.md
+      - CHANGELOG.md
+      - .github/ISSUE_TEMPLATE/
+      - .github/pull_request_template.md
+      - docs/adr/
+
+  - key: "OSP-082"
+    type: "Task"
+    title: "Configure Maven Central and supply-chain release automation"
+    parent: "OSP-080"
+    depends_on:
+      - "OSP-011"
+      - "OSP-012"
+      - "OSP-061"
+      - "OSP-062"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Release"
+      Phase: "Phase 4"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-082 -->
+
+      ## Goal
+      Produce and securely publish complete, signed, traceable Maven artifacts for the four release coordinates.
+
+      ## Scope
+      Configure BOM alignment, source/Javadoc JARs, artifact signing, Central publication, release profiles, SBOM, checksums, provenance/attestation where available, API compatibility check, and protected workflow.
+
+      ## Requirement Sources
+      - Blueprint §§3.2, 11.1-11.3, and scheduled/protected release pipeline steps 19-25.
+      - Repository evidence: no release workflow or package-publishing configuration currently exists.
+
+      ## Implementation Notes
+      - Revapi or japicmp begins once the public API is stabilized; secrets/signing material enter only protected release jobs.
+
+      ## Acceptance Criteria
+      - The staged reactor produces core, CLI, connector, and BOM artifacts with matching 0.1.0 coordinates plus source/Javadoc JARs, signatures, and checksums.
+      - The protected workflow requires fast checks, local smoke, real-org suite, signing verification, license/security gates, and SBOM before Central publication.
+      - Generated SBOM covers release artifacts, and provenance/attestation is emitted when the selected release infrastructure supports it.
+      - A clean consumer resolves aligned versions through the staged BOM and detects an intentional accidental public-API break after baseline creation.
+
+      ## Verification
+      - Run the release profile against a non-public staging target, verify signatures/checksums/SBOM, consume all artifacts in a clean sample, and exercise the API compatibility gate.
+
+      ## Risks / Constraints
+      - Optional GitHub Packages snapshots cannot replace Maven Central or leak credentials from forks/pull requests.
+
+      ## Likely Modules / Files
+      - pom.xml
+      - bom/pom.xml
+      - .github/workflows/release.yml
+
+  - key: "OSP-083"
+    type: "Task"
+    title: "Verify and publish the documented 0.1.0 release"
+    parent: "OSP-080"
+    depends_on:
+      - "OSP-063"
+      - "OSP-072"
+      - "OSP-081"
+      - "OSP-082"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Release"
+      Phase: "Phase 4"
+      Size: "M"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-083 -->
+
+      ## Goal
+      Make the final go/no-go decision and publish exactly the tested, documented 0.1.0 connector.
+
+      ## Scope
+      Audit the definition of done, run all protected checks, finalize changelog/release notes, publish Central artifacts, tag the release, and create the GitHub release with checksums/SBOM/signatures.
+
+      ## Requirement Sources
+      - Blueprint §§11.2-11.3, 13-14, and final recommendation §15.
+
+      ## Implementation Notes
+      - Release only after real Salesforce and released-version Orbital evidence is current; a signed Git tag is used where organizational policy supports it.
+
+      ## Acceptance Criteria
+      - Every checkbox in blueprint §14 has traceable passing evidence or the release is stopped.
+      - Maven Central contains resolvable signed 0.1.0 core, CLI, connector, and BOM artifacts matching the tested commit.
+      - GitHub release notes accurately state scope, non-goals, compatibility, replay/delivery/cancellation limits, security guidance, and community non-affiliation.
+      - The release attaches/publishes checksums, SBOM, signed artifacts and, where available, provenance without credentials or sensitive fixtures.
+
+      ## Verification
+      - Run the full protected release workflow, verify Central resolution from a clean environment, verify signatures/checksums/SBOM, and rerun subscribe/publish artifact smoke tests.
+
+      ## Risks / Constraints
+      - Any failing gate, stale compatibility evidence, documentation mismatch, or secret exposure is an unconditional no-go.
+
+      ## Likely Modules / Files
+      - CHANGELOG.md
+      - .github/workflows/release.yml
+      - pom.xml
+      - docs/
+      - docs/adr/
+
+  - key: "OSP-051"
+    type: "Spike"
+    title: "Determine supported Orbital source acknowledgement semantics"
+    parent: "OSP-050"
+    depends_on:
+      - "OSP-043"
+      - "OSP-061"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Spike"
+      Priority: "P0"
+      Area: "Orbital Adapter"
+      Phase: "Phase 2"
+      Size: "M"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-051 -->
+
+      ## Goal
+      Establish the strongest truthful acknowledgement, checkpoint, backpressure, error, and cancellation behavior available in a specific released Orbital version.
+
+      ## Scope
+      Inspect supported-version Kafka and SQS sources, delivery callbacks, OperationInvoker/source-stream lifecycle, downstream completion/failure propagation, and cancellation.
+
+      ## Requirement Sources
+      - Blueprint §§6.7-6.8, 8.10, 10.5 checkpoint behavior, and mandatory stop condition §13.1.
+
+      ## Implementation Notes
+      - Produce a concise ADR/report naming the inspected released version and evidence; do not copy upstream code or design an acknowledgement API without an invocation point.
+
+      ## Acceptance Criteria
+      - The report states Kafka commit behavior, SQS acknowledge/delete behavior, downstream success/failure callback availability, OperationInvoker interaction, and cancellation propagation.
+      - The report selects one implementable checkpoint rule and explicitly states whether Salesforce demand can couple to Orbital capacity.
+      - If no downstream-success boundary exists, the report prohibits describing handler return as destination commit and retains the no-exactly-once statement.
+      - Adapter implementation is marked blocked until this report is reviewed and its supported Orbital version is recorded.
+
+      ## Verification
+      - Reproduce cited behavior with bounded source inspection and focused connector-SPI tests or executable probes; review the report against every mandatory question.
+
+      ## Risks / Constraints
+      - This is a hard gate; unresolved or conflicting SPI evidence stops OSP-052 through OSP-056.
+
+      ## Likely Modules / Files
+      - docs/adr/
+      - orbital-salesforce-connector/src/test/kotlin/
+
+  - key: "OSP-052"
+    type: "Task"
+    title: "Implement Taxi annotations and declaration validation"
+    parent: "OSP-050"
+    depends_on:
+      - "OSP-051"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Orbital Adapter"
+      Phase: "Phase 2"
+      Size: "L"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-052 -->
+
+      ## Goal
+      Represent source, sink, connection, replay preset, and optional metadata declarations distinctly and reject invalid Taxi contracts early.
+
+      ## Scope
+      Implement SalesforcePubSubService, SalesforceSubscribe, SalesforcePublish, SalesforceReplayPreset, SalesforceEventMetadata, and compatible declaration validation.
+
+      ## Requirement Sources
+      - Blueprint §§8.2-8.4 and adapter tests in §10.5.
+
+      ## Implementation Notes
+      - Subscribe is read plus Stream<T>; Publish is write with exactly one payload; raw replay IDs are never annotation fields.
+
+      ## Acceptance Criteria
+      - Valid service, subscribe, publish, replay preset, and metadata annotations are recognized by the supported Orbital/Taxi release.
+      - Subscribe rejects non-read operations, non-Stream<T> returns, blank topics, and invalid presets with actionable declaration locations.
+      - Publish rejects non-write operations, parameter counts other than one, and blank topics; service rejects blank connection names.
+      - Metadata annotations reject incompatible fields, and no annotation permits a raw custom replay token.
+
+      ## Verification
+      - Run positive and negative Taxi compilation/validation fixtures for every rule and compare actionable diagnostics.
+
+      ## Risks / Constraints
+      - Separate source and sink annotations must not be replaced with one overloaded operation annotation.
+
+      ## Likely Modules / Files
+      - orbital-salesforce-connector/src/main/resources/
+      - orbital-salesforce-connector/src/main/kotlin/
+      - orbital-salesforce-connector/src/test/resources/
+
+  - key: "OSP-053"
+    type: "Task"
+    title: "Implement named connections and OperationInvoker routing"
+    parent: "OSP-050"
+    depends_on:
+      - "OSP-021"
+      - "OSP-051"
+      - "OSP-052"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Orbital Adapter"
+      Phase: "Phase 2"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-053 -->
+
+      ## Goal
+      Resolve safe named Salesforce connections and route declared read/write operations to the matching core behavior.
+
+      ## Scope
+      Implement configuration parsing/validation, secret references, connection lookup, supported-version OperationInvoker integration, read subscription routing, and write publish routing.
+
+      ## Requirement Sources
+      - Blueprint §§8.1, 8.9-8.10 and implementation order steps 33-34.
+
+      ## Implementation Notes
+      - Startup may validate config references but must not eagerly subscribe to every declared source; event-stream response caching is disabled/avoided.
+
+      ## Acceptance Criteria
+      - A valid named connection maps auth, endpoint, subscription, retry, and gRPC values into core configuration without placing secrets in Taxi.
+      - Missing connection, unresolved required secret, and invalid flow/retry settings fail with actionable configuration errors before remote use.
+      - Read declarations invoke subscription and return the supported streaming type; write declarations invoke unary publish and return the supported result type.
+      - No source stream is opened until Orbital starts its corresponding query, and event-stream responses are not cached as ordinary reads.
+
+      ## Verification
+      - Run configuration fixture, secret-redaction, lazy-start, routing, and response-cache behavior tests against the supported Orbital version.
+
+      ## Risks / Constraints
+      - Environment values SF_LOGIN_URL, SF_CLIENT_ID, and SF_CLIENT_SECRET must never enter generated Taxi or logs.
+
+      ## Likely Modules / Files
+      - orbital-salesforce-connector/src/main/kotlin/
+      - orbital-salesforce-connector/src/test/resources/
+
+  - key: "OSP-054"
+    type: "Task"
+    title: "Map Salesforce events, publish payloads, and metadata"
+    parent: "OSP-050"
+    depends_on:
+      - "OSP-024"
+      - "OSP-041"
+      - "OSP-052"
+      - "OSP-053"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Orbital Adapter"
+      Phase: "Phase 2"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-054 -->
+
+      ## Goal
+      Convert neutral core events and receipts to declared Taxi types and outgoing TypedInstance values to validated publish maps.
+
+      ## Scope
+      Implement subscribe/publish mapping, closed-model behavior, nullability, supported nesting, explicit metadata mapping, and receipt conversion.
+
+      ## Requirement Sources
+      - Blueprint §§8.4-8.7 and mapping tests in §10.5.
+
+      ## Implementation Notes
+      - Extra Salesforce fields are ignored for closed models; missing required Taxi fields fail; replay ID is Base64 only at the Taxi boundary.
+
+      ## Acceptance Criteria
+      - Valid decoded maps preserve nullable and tested nested values in TypedInstance while ignoring undeclared source fields in closed models.
+      - Missing required output fields and invalid outgoing values fail actionably before emission or remote publish.
+      - Event ID, replay ID, topic, schema ID, and received time populate only explicitly annotated compatible metadata fields.
+      - Publish payload and successful receipt mappings preserve semantic types and correlation without making the Salesforce physical model universal.
+
+      ## Verification
+      - Run positive/negative mapping fixtures for nullability, nesting, extras, missing required fields, outgoing validation, every metadata type, Base64 replay, and receipt conversion.
+
+      ## Risks / Constraints
+      - Raw source payload diagnostics remain opt-in and cannot expose sensitive payloads by default.
+
+      ## Likely Modules / Files
+      - orbital-salesforce-connector/src/main/kotlin/
+      - orbital-salesforce-connector/src/test/kotlin/
+
+  - key: "OSP-055"
+    type: "Task"
+    title: "Implement Orbital stream lifecycle and truthful checkpoint behavior"
+    parent: "OSP-050"
+    depends_on:
+      - "OSP-031"
+      - "OSP-032"
+      - "OSP-033"
+      - "OSP-035"
+      - "OSP-051"
+      - "OSP-053"
+      - "OSP-054"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P0"
+      Area: "Orbital Adapter"
+      Phase: "Phase 2"
+      Size: "L"
+      Risk: "High"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-055 -->
+
+      ## Goal
+      Adapt core subscriptions to Orbital Stream<TypedInstance> with bounded demand and complete cancellation, error, and checkpoint propagation.
+
+      ## Scope
+      Implement the exact OSP-051-selected stream bridge, capacity coupling where supported, query cancellation/timeout/normal termination, and checkpoint timing.
+
+      ## Requirement Sources
+      - Blueprint §§6.7-6.8, 8.8, 8.10, and stream/checkpoint tests in §10.5.
+
+      ## Implementation Notes
+      - Persist only after true downstream success if such a callback exists; otherwise implement and document the weaker verified boundary without calling it destination commit.
+
+      ## Acceptance Criteria
+      - Orbital cancellation, timeout, and normal termination stop demand, cancel gRPC, cancel reconnects, release buffers, close resources, and preserve already durable replay state.
+      - Normal cancellation reaches STOPPED, not FAILED, and repeated start/cancel cycles leave no orphan thread, coroutine, channel, or stream.
+      - Demand couples to downstream capacity only where the supported SPI exposes it and never exceeds core max-in-flight bounds.
+      - Checkpoint writes and delivery language exactly match the reviewed OSP-051 contract and never claim exactly-once.
+
+      ## Verification
+      - Run supported-version cancellation, timeout, error, backpressure, checkpoint-success/failure, race, and resource-leak tests.
+
+      ## Risks / Constraints
+      - Any conflict with OSP-051 evidence stops implementation for human resolution.
+
+      ## Likely Modules / Files
+      - orbital-salesforce-connector/src/main/kotlin/
+      - orbital-salesforce-connector/src/test/kotlin/
+
+  - key: "OSP-056"
+    type: "Task"
+    title: "Bridge core telemetry to Orbital tracing, metrics, and health"
+    parent: "OSP-050"
+    depends_on:
+      - "OSP-025"
+      - "OSP-053"
+      - "OSP-055"
+    labels: []
+    project_fields:
+      Status: "Backlog"
+      ItemType: "Task"
+      Priority: "P1"
+      Area: "Orbital Adapter"
+      Phase: "Phase 2"
+      Size: "M"
+      Risk: "Medium"
+      Target version: "0.1.0"
+      Agent-ready: "No"
+    body: |
+      <!-- work-item-key: OSP-056 -->
+
+      ## Goal
+      Make connection, subscription, decode, reconnect, and publish behavior diagnosable through Orbital without high-cardinality or sensitive data.
+
+      ## Scope
+      Bridge the core telemetry SPI to Orbital tracing, required metrics, structured lifecycle logs, query/request context, and application-level health.
+
+      ## Requirement Sources
+      - Blueprint §§9.1-9.4 and adapter observability requirements in §8.1.
+
+      ## Implementation Notes
+      - Use replay hashes and low-cardinality labels; enable checkpoint/processing metrics only if OSP-051 proves their semantics.
+
+      ## Acceptance Criteria
+      - All always-required blueprint metrics are emitted with only connectionName, topic, outcome, or exceptionType labels as applicable.
+      - Logs include appropriate connection/topic/consumer/service/operation/query/schema/retry/category context without credentials, full replay IDs, payloads, customer IDs, or PII labels.
+      - Health reflects application lifecycle rather than raw channel state and maps transient retries, repeated decode failures, terminal auth/config failures, and graceful close correctly.
+      - Conditional checkpoint-age/processing-duration metrics are absent unless justified by OSP-051 and tested against the actual acknowledgement boundary.
+
+      ## Verification
+      - Run metric/tracing snapshots, low-cardinality assertions, captured-log redaction tests, and supported-version health transition tests.
+
+      ## Risks / Constraints
+      - Topic labels are permitted but dynamically generated consumer or event identifiers are not metric labels.
+
+      ## Likely Modules / Files
+      - orbital-salesforce-connector/src/main/kotlin/
+      - orbital-salesforce-connector/src/test/kotlin/
