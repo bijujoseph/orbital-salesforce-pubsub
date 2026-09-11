@@ -32,6 +32,7 @@ for sarif_file in "${sarif_files[@]}"; do
   if ! jq -e '
     type == "object" and
     (.runs | type) == "array" and
+    (.runs | length) > 0 and
     all(.runs[];
       (.tool | type) == "object" and
       (.tool.driver | type) == "object" and

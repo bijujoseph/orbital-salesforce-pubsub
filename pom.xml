@@ -290,7 +290,9 @@
                                  this avoids unauthenticated 401 failures. -->
                             <ossindexAnalyzerEnabled>false</ossindexAnalyzerEnabled>
                             <suppressionFiles>
-                                ${project.basedir}/config/security/dependency-check-suppressions.xml
+                                <suppressionFile>
+                                    ${project.basedir}/config/security/dependency-check-suppressions.xml
+                                </suppressionFile>
                             </suppressionFiles>
                             <formats>
                                 <format>HTML</format>
