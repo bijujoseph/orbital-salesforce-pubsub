@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: echo "datetime=$(date -u '+%Y%m%d%H')" >> "$GITHUB_OUTPUT"
       - name: Restore Dependency-Check NVD data
-        uses: actions/cache/restore@v4.2.4
+        uses: actions/cache/restore@v6.1.0
         with:
           # Dependency-Check 11+ stores its H2 NVD database here. Do not use
           # setup-java's Maven cache in this job, because it would overlap this
@@ -67,7 +67,7 @@ jobs:
           mvn "${scan_args[@]}" org.owasp:dependency-check-maven:aggregate
       - name: Save Dependency-Check NVD data
         if: always()
-        uses: actions/cache/save@v4.2.4
+        uses: actions/cache/save@v6.1.0
         with:
           path: ~/.m2/repository/org/owasp/dependency-check-data
           key: ${{ runner.os }}-dependency-check-${{ steps.nvd-cache-date.outputs.datetime }}-${{ hashFiles('**/pom.xml') }}
