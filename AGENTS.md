@@ -47,14 +47,12 @@ retry policy; report and diagnose them normally.
 3. `project_item_writer` preflights the approved plan and presents a mutation
    preview.
 4. A human explicitly approves the preview.
-5. The writer creates repository issues, links them to the Project, applies
-   only the approved fields and relationships, then verifies and reports the
-   result. Project-only draft issues are not work items for this workflow.
+5. `project_item_writer` creates/updates repository issues, links them to the Project, applies only the approved fields and relationships, then verifies and reports the result. Project-only draft issues are not work items for this workflow.
 
 ## Implementation workflow
 
 1. The orchestrator assigns one unblocked Ready work item to a dedicated Git
-   worktree and issue branch.
+   worktree and issue branch. Based on the dependency of work items, the orchestrator will assign the work to dedicated agents outlined below.
 2. `coder` implements only that work item in the assigned worktree.
 3. `tester` defines expected-behavior cases from the assigned issue and
    canonical blueprint before reading the implementation, then independently
