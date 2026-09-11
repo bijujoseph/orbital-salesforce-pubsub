@@ -32,7 +32,7 @@
              modules inherit the quality plugin but have no Kotlin source tree. -->
         <detekt.skip>true</detekt.skip>
 
-        <maven-clean-plugin.version>3.3.2</maven-clean-plugin.version>
+        <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
         <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
         <maven-antrun-plugin.version>3.1.0</maven-antrun-plugin.version>
         <maven-install-plugin.version>3.1.3</maven-install-plugin.version>
