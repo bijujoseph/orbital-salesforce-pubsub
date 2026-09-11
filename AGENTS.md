@@ -44,7 +44,7 @@ retry policy; report and diagnose them normally.
    `docs/planning/v0.1-work-plan.yaml`.
 2. The planner validates the draft plan; a human reviews and explicitly
   approves it by setting `approval.approved` to true and recording non-empty `approved_by` and `approved_at` metadata.
-3. `project_item_writer` read the approved plan and creates/updates repository issues, links them to the Project, applies only the approved fields and relationships, then verifies and reports the result. Project-only draft issues are not work items for this workflow.
+3. `project_item_writer` reads the approved plan and creates/updates repository issues, links them to the Project, applies only the approved fields and relationships, then verifies and reports the result. Project-only draft issues are not work items for this workflow.
 
 ## Implementation workflow
 
