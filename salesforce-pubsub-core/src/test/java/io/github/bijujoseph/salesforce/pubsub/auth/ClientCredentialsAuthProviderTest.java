@@ -213,7 +213,7 @@ class ClientCredentialsAuthProviderTest {
     var second = provider.authenticate();
     try {
       assertTrue(secondRequestStarted.await(5, TimeUnit.SECONDS));
-      provider.clearInFlight(first.toCompletableFuture(), null, null);
+      provider.clearInFlight(first.toCompletableFuture());
       assertSame(second, provider.authenticate());
     } finally {
       releaseSecondRequest.countDown();

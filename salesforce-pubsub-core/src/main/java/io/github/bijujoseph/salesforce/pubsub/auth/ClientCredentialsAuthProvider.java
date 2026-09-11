@@ -81,7 +81,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
 
       CompletableFuture<SalesforceSession> request = sendTokenRequest();
       inFlight = request;
-      request.whenComplete((session, failure) -> clearInFlight(request, session, failure));
+      request.whenComplete((session, failure) -> clearInFlight(request));
       return request;
     }
   }
@@ -155,10 +155,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
     }
   }
 
-  void clearInFlight(
-      CompletableFuture<SalesforceSession> completedRequest,
-      SalesforceSession ignoredSession,
-      Throwable ignoredFailure) {
+  void clearInFlight(CompletableFuture<SalesforceSession> completedRequest) {
     synchronized (requestLock) {
       if (inFlight == completedRequest) {
         inFlight = null;
