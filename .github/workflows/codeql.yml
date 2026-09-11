@@ -42,7 +42,7 @@ jobs:
           fi
       - name: Initialize CodeQL
         if: steps.detect-sources.outputs.has_source == 'true'
-        uses: github/codeql-action/init@v4.33.0
+        uses: github/codeql-action/init@v4.37.9
         with:
           languages: java-kotlin
           queries: security-and-quality
@@ -51,7 +51,7 @@ jobs:
         run: mvn -B -ntp -Ddependency-check.skip=true -DskipTests compile
       - name: Upload CodeQL results
         if: steps.detect-sources.outputs.has_source == 'true'
-        uses: github/codeql-action/analyze@v4.33.0
+        uses: github/codeql-action/analyze@v4.37.9
         with:
           category: "/language:java-kotlin"
           output: codeql-results
