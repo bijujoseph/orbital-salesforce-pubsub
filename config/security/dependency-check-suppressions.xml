@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.4.xsd"
+              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+              xsi:schemaLocation="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.4.xsd
+                                  https://dependency-check.github.io/DependencyCheck/dependency-suppression.1.4.xsd">
+    <suppress until="2026-12-31Z">
+        <notes><![CDATA[
+            Temporary, exact false-positive suppression for org.jetbrains.kotlin:kotlin-stdlib:2.0.21.
+            GitHub advisory GHSA-r937-wjx7-w2jp identifies the affected Maven package as
+            org.jetbrains.kotlin:kotlin-gradle-plugin (<2.4.20-Beta1), not kotlin-stdlib:
+            https://github.com/advisories/GHSA-r937-wjx7-w2jp
+            OWASP Dependency-Check issue #8749 documents the generic Kotlin CPE false positive:
+            https://github.com/dependency-check/DependencyCheck/issues/8749
+            CVE-2020-29582 is reported by GitHub advisory GHSA-cqj8-47ch-rvv only for
+            kotlin-stdlib <=1.4.20; 1.4.21 is fixed, so it does not affect 2.0.21:
+            https://github.com/advisories/GHSA-cqj8-47ch-rvv
+            Re-evaluate and remove this rule by 2026-12-31; it is not a blanket Kotlin suppression.
+        ]]></notes>
+        <gav>org.jetbrains.kotlin:kotlin-stdlib:2.0.21</gav>
+        <cve>CVE-2026-53914</cve>
+        <cve>CVE-2020-29582</cve>
+    </suppress>
+</suppressions>

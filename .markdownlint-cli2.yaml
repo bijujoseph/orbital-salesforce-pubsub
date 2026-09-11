@@ -1,0 +1,14 @@
+ignores:
+  - "AGENTS.md"
+  - ".github/copilot-instructions.md"
+  - "docs/planning/github-project-sync-report.md"
+
+config:
+  default: true
+  # Keep the baseline's existing prose layout stable; semantic Markdown rules
+  # remain enabled for README and future user-facing documentation.
+  MD009: false
+  MD012: false
+  MD013: false
+  MD022: false
+  MD060: false
