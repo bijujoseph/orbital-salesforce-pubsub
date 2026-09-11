@@ -14,6 +14,20 @@ jobs:
     if: github.event.review.state == 'APPROVED' && github.event.pull_request.state == 'open' && github.event.review.user.login != github.event.pull_request.user.login && github.event.review.commit_id == github.event.pull_request.head.sha
     runs-on: ubuntu-latest
     steps:
+      - name: Verify approval still applies
+        run: |
+          IFS=$'\t' read -r current_head review_decision < <(
+            gh pr view "$PR_URL" --json headRefOid,reviewDecision --jq '[.headRefOid, (.reviewDecision // "")] | @tsv'
+          )
+
+          if [ "$current_head" != "$REVIEW_COMMIT_ID" ] || [ "$review_decision" != "APPROVED" ]; then
+            echo "Approval no longer applies to the current head; skipping auto-merge enablement."
+            exit 0
+          fi
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REVIEW_COMMIT_ID: ${{ github.event.review.commit_id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable auto-merge (squash)
         run: gh pr merge --auto --squash "$PR_URL"
         env:
