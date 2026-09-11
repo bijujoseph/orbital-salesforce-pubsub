@@ -1,0 +1,73 @@
+name: Dependency Check
+
+# Never run two NVD updates concurrently; this protects the shared upstream
+# service and keeps manual runs from duplicating an in-flight scheduled scan.
+concurrency:
+  group: dependency-check
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: "47 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: OWASP Dependency-Check
+    runs-on: ubuntu-latest
+    # A cold NVD bootstrap can be lengthy; this job is schedule/manual-only
+    # and never runs on the PR critical path.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Set up Java 21
+        uses: actions/setup-java@v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Get NVD cache timestamp
+        id: nvd-cache-date
+        shell: bash
+        run: echo "datetime=$(date -u '+%Y%m%d%H')" >> "$GITHUB_OUTPUT"
+      - name: Restore Dependency-Check NVD data
+        uses: actions/cache/restore@v4.2.4
+        with:
+          # Dependency-Check 11+ stores its H2 NVD database here. Do not use
+          # setup-java's Maven cache in this job, because it would overlap this
+          # explicitly managed path.
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: ${{ runner.os }}-dependency-check-${{ steps.nvd-cache-date.outputs.datetime }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-dependency-check-${{ steps.nvd-cache-date.outputs.datetime }}-
+            ${{ runner.os }}-dependency-check-
+      - name: Run fail-closed Dependency-Check
+        if: hashFiles('pom.xml') != ''
+        shell: bash
+        env:
+          # The key is optional. Forked pull requests and installations without
+          # this secret still run with Dependency-Check's unauthenticated rate.
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          set -euo pipefail
+          scan_args=(
+            -B
+            -ntp
+            -Pdependency-check
+            -DskipTests
+            -DskipITs
+          )
+          if [[ -n "${NVD_API_KEY:-}" ]]; then
+            scan_args+=("-DnvdApiKey=${NVD_API_KEY}")
+          fi
+          mvn "${scan_args[@]}" org.owasp:dependency-check-maven:aggregate
+      - name: Save Dependency-Check NVD data
+        if: always()
+        uses: actions/cache/save@v4.2.4
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: ${{ runner.os }}-dependency-check-${{ steps.nvd-cache-date.outputs.datetime }}-${{ hashFiles('**/pom.xml') }}

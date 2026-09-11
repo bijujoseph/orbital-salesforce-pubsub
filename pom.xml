@@ -242,31 +242,7 @@
                 </executions>
             </plugin>
 
-            <!-- These are aggregator-only gates.  Running them once from the
-                 reactor root avoids duplicate NVD/license scans for every module. -->
-            <plugin>
-                <groupId>org.owasp</groupId>
-                <artifactId>dependency-check-maven</artifactId>
-                <inherited>false</inherited>
-                <configuration>
-                    <failBuildOnCVSS>7.0</failBuildOnCVSS>
-                    <failOnError>true</failOnError>
-                    <formats>
-                        <format>HTML</format>
-                        <format>JUNIT</format>
-                        <format>SARIF</format>
-                    </formats>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>quality-dependency-check</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>aggregate</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
+            <!-- The license check remains an aggregator-only gate. -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>license-maven-plugin</artifactId>
@@ -292,4 +268,39 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Dependency-Check is intentionally opt-in.  NVD updates are too
+             expensive for the normal verify lifecycle; the scheduled/manual
+             security workflow invokes this profile with a persistent cache. -->
+        <profile>
+            <id>dependency-check</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <inherited>false</inherited>
+                        <configuration>
+                            <failBuildOnCVSS>7.0</failBuildOnCVSS>
+                            <failOnError>true</failOnError>
+                            <failBuildOnUnusedSuppressionRule>true</failBuildOnUnusedSuppressionRule>
+                            <!-- Sonatype OSS Index now requires a separate
+                                 credential; NVD remains the blocking source and
+                                 this avoids unauthenticated 401 failures. -->
+                            <ossindexAnalyzerEnabled>false</ossindexAnalyzerEnabled>
+                            <suppressionFiles>
+                                ${project.basedir}/config/security/dependency-check-suppressions.xml
+                            </suppressionFiles>
+                            <formats>
+                                <format>HTML</format>
+                                <format>JUNIT</format>
+                                <format>SARIF</format>
+                            </formats>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
