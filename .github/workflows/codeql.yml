@@ -27,17 +27,33 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+      - name: Detect analyzable source
+        id: detect-sources
+        shell: bash
+        run: |
+          source_file="$(find . -type f \( -name '*.java' -o -name '*.kt' \) \
+            -not -path './.git/*' -not -path '*/target/*' -print -quit)"
+          if [[ -n "$source_file" ]]; then
+            echo "has_source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_source=false" >> "$GITHUB_OUTPUT"
+            echo "No Java or Kotlin source files are present; CodeQL analysis is deferred until implementation begins."
+          fi
       - name: Initialize CodeQL
+        if: steps.detect-sources.outputs.has_source == 'true'
         uses: github/codeql-action/init@v4.33.0
         with:
           languages: java-kotlin
           queries: security-and-quality
       - name: Build for CodeQL
-        uses: github/codeql-action/autobuild@v4.33.0
+        if: steps.detect-sources.outputs.has_source == 'true'
+        run: mvn -B -ntp -Ddependency-check.skip=true -DskipTests compile
       - name: Upload CodeQL results
+        if: steps.detect-sources.outputs.has_source == 'true'
         uses: github/codeql-action/analyze@v4.33.0
         with:
           category: "/language:java-kotlin"
           output: codeql-results
       - name: Enforce high-severity CodeQL findings
+        if: steps.detect-sources.outputs.has_source == 'true'
         run: bash .github/scripts/check-codeql-security.sh codeql-results

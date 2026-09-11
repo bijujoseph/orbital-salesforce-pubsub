@@ -2,7 +2,12 @@
 
 set -euo pipefail
 
-version="${1:-0.1.0}"
+version="${1:-}"
+if [[ -z "$version" ]]; then
+  version="$(mvn -B -ntp -q help:evaluate \
+    -Dexpression=project.version -DforceStdout)"
+fi
+test -n "$version"
 
 declare -a jars=(
   "salesforce-pubsub-core/target/salesforce-pubsub-core-${version}.jar"
@@ -13,7 +18,9 @@ declare -a jars=(
 
 for jar_file in "${jars[@]}"; do
   test -s "$jar_file"
-  jar tf "$jar_file" | grep -qx 'META-INF/MANIFEST.MF'
+  # Do not use grep -q with pipefail: grep can close the pipe early and make
+  # jar receive SIGPIPE after it has already produced a valid listing.
+  jar tf "$jar_file" | grep -Fx 'META-INF/MANIFEST.MF' >/dev/null
 done
 
 # A Maven POM-packaged module has no JAR under target; its source POM is the

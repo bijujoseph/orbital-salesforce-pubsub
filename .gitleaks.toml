@@ -4,8 +4,7 @@ title = "Orbital Salesforce Pub/Sub secret scanning"
 useDefault = true
 
 [[allowlists]]
-description = "Generated output and the scanner configuration are not source fixtures"
+description = "Generated output is not a source fixture"
 paths = [
-  '''(^|/)target/''',
-  '''(^|/)\.gitleaks\.toml$'''
+  '''(^|/)target/'''
 ]

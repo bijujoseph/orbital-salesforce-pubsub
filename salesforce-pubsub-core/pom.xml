@@ -76,6 +76,7 @@
                                         <include>io.github.bijujoseph.salesforce.pubsub.replay*</include>
                                         <include>io.github.bijujoseph.salesforce.pubsub.schema*</include>
                                         <include>io.github.bijujoseph.salesforce.pubsub.subscription*</include>
+                                        <include>io.github.bijujoseph.salesforce.pubsub.model*</include>
                                     </includes>
                                     <limits>
                                         <limit>
@@ -121,7 +122,11 @@
                                     </and>
                                 </condition>
                                 <condition property="coverage.data">
-                                    <available file="${project.build.directory}/jacoco.exec"/>
+                                    <and>
+                                        <available file="${project.build.directory}/jacoco.exec" type="file"/>
+                                        <length file="${project.build.directory}/jacoco.exec"
+                                                when="greater" length="0"/>
+                                    </and>
                                 </condition>
                                 <fail if="coverage.classes" unless="coverage.data"
                                       message="JaCoCo execution data is required when core production classes exist."/>

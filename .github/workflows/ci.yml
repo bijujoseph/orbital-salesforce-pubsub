@@ -35,7 +35,10 @@ jobs:
       - name: Check Markdown links
         uses: lycheeverse/lychee-action@v2.9.0
         with:
-          args: --verbose --no-progress --exclude-mail './**/*.md'
+          # lychee excludes mail addresses by default; --exclude-mail was
+          # removed from current lychee releases and makes the action fail
+          # before it can inspect the Markdown files.
+          args: --verbose --no-progress './**/*.md'
           fail: true
       - name: Run clean Maven verify
         run: |
