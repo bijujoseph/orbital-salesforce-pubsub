@@ -26,3 +26,12 @@ replay_pid*
 # Kotlin Gradle plugin data, see https://kotlinlang.org/docs/whatsnew20.html#new-directory-for-kotlin-data-in-gradle-projects
 .kotlin/
 *.kotlin_module
+.local/
+.idea/
+
+.agents/
+.codex/
+
+# Temporary planning/report artifacts.
+docs/planning/*.tmp
+docs/planning/*.bak

@@ -13,6 +13,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate work plan when present
+        if: hashFiles('docs/planning/v0.1-work-plan.yaml') != ''
+        run: |
+          python -m pip install --disable-pip-version-check --no-input "PyYAML>=6,<7"
+          python tools/validate_work_plan.py \
+            --plan docs/planning/v0.1-work-plan.yaml
       - name: Run Maven verify
         run: |
           mapfile -t poms < <(find . -name pom.xml -not -path '*/target/*')
@@ -23,4 +32,3 @@ jobs:
           for pom in "${poms[@]}"; do
             mvn -B -ntp -f "$pom" verify
           done
-          fi
