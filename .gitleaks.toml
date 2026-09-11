@@ -2,9 +2,3 @@ title = "Orbital Salesforce Pub/Sub secret scanning"
 
 [extend]
 useDefault = true
-
-[[allowlists]]
-description = "Generated output is not a source fixture"
-paths = [
-  '''(^|/)target/'''
-]
