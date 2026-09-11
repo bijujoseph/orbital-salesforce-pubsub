@@ -12,7 +12,8 @@ private planning material.
 - Allocate the next number when a record is started; do not reuse a number.
 - Keep the record in this directory and link it from related documentation or
   pull requests when useful.
-- Start from [000-template.md](000-template.md).
+- Start from the reserved template [000-template.md](000-template.md); it is
+  the only three-digit filename exception and is not an ADR record.
 
 ## When to write an ADR
 

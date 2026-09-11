@@ -25,13 +25,15 @@ make participation unsafe or hostile.
 
 ## Enforcement and reporting
 
-If you experience or witness a conduct concern, request a private contact
-channel from the repository maintainers through GitHub. Do not put sensitive
-personal information or an unresolved allegation in a public issue, pull
-request, or discussion. Use the private vulnerability-reporting route in
-[SECURITY.md](SECURITY.md) only when the report also involves a security
-vulnerability; otherwise ask the maintainers to provide an appropriate private
-channel.
+If you experience or witness a conduct concern, use the repository's [private
+GitHub report form](https://github.com/bijujoseph/orbital-salesforce-pubsub/security/advisories/new)
+only to request a private conduct-reporting channel. Submit only an
+administrative request such as "Please provide a private conduct-reporting
+channel"; do not include the allegation, personal information, or security
+details in that request. If private reporting is unavailable, do not post the
+concern publicly; wait for maintainers to enable the form or provide a private
+channel through an organization-approved route. Use the private process in
+[SECURITY.md](SECURITY.md) for an actual security vulnerability.
 
 Reports will be handled as confidentially as practical. Maintainers may remove
 comments, restrict participation, or take other action needed to protect the

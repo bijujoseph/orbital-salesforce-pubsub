@@ -33,4 +33,4 @@ not include credentials, customer data, or private vulnerability details. -->
 - [ ] I have kept credentials, secrets, and private customer data out of this
       request.
 - [ ] I understand that implementation and contribution terms are documented
-      in [CONTRIBUTING.md](../../CONTRIBUTING.md).
+      in the repository's CONTRIBUTING.md file.

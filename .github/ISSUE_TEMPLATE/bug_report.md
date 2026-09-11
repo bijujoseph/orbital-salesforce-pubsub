@@ -43,5 +43,5 @@ headers, personal data, and customer payloads before attaching anything. -->
 - [ ] I searched existing issues and did not find a duplicate.
 - [ ] I used synthetic or redacted data and removed all credentials and secrets.
 - [ ] This report does not contain details of an unresolved security
-      vulnerability. I will use the private process in [SECURITY.md](../../SECURITY.md)
-      for that purpose.
+      vulnerability. I will use the private process in the repository's
+      SECURITY.md file for that purpose.
