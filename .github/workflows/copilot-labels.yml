@@ -1,0 +1,29 @@
+name: Copilot review labels
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+on:
+  pull_request:
+    types: [review_requested]
+  pull_request_review:
+    types: [submitted]
+permissions:
+  pull-requests: write
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    env:
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Copilot started reviewing
+        if: contains(github.event.requested_reviewer.login, 'copilot')
+        run: gh pr edit "$PR_URL" --add-label "copilot-reviewing"
+
+      - name: Copilot approved
+        if: contains(github.event.review.user.login, 'copilot') && github.event.review.state == 'approved'
+        run: gh pr edit "$PR_URL" --remove-label "copilot-reviewing" --add-label "copilot-approved"
+
+      - name: Copilot did not approve
+        if: contains(github.event.review.user.login, 'copilot') && github.event.review.state != 'approved'
+        run: gh pr edit "$PR_URL" --remove-label "copilot-reviewing" --add-label "copilot-changes-requested"
