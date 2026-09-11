@@ -16,6 +16,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Validate work plan when present
         if: hashFiles('docs/planning/v0.1-work-plan.yaml') != ''
         run: |
@@ -24,11 +28,8 @@ jobs:
             --plan docs/planning/v0.1-work-plan.yaml
       - name: Run Maven verify
         run: |
-          mapfile -t poms < <(find . -name pom.xml -not -path '*/target/*')
-          if [ "${#poms[@]}" -eq 0 ]; then
-            echo "No pom.xml found yet; skipping Maven verification."
+          if [ ! -f pom.xml ]; then
+            echo "No root pom.xml found yet; skipping Maven verification."
             exit 0
           fi
-          for pom in "${poms[@]}"; do
-            mvn -B -ntp -f "$pom" verify
-          done
+          mvn -B -ntp verify
