@@ -1,0 +1,11 @@
+title = "Orbital Salesforce Pub/Sub secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated output and the scanner configuration are not source fixtures"
+paths = [
+  '''(^|/)target/''',
+  '''(^|/)\.gitleaks\.toml$'''
+]

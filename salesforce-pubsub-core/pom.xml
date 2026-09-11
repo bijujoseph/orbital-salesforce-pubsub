@@ -21,4 +21,115 @@
             <artifactId>slf4j-api</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Coverage is enforced where the protocol core is implemented.
+                 JaCoCo skips a missing/empty execution report, which lets the
+                 current scaffold build while these limits become mandatory as
+                 soon as production classes are introduced. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>coverage-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>coverage-report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>coverage-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <haltOnFailure>true</haltOnFailure>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.80</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.70</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                                <rule>
+                                    <element>PACKAGE</element>
+                                    <includes>
+                                        <include>io.github.bijujoseph.salesforce.pubsub.auth*</include>
+                                        <include>io.github.bijujoseph.salesforce.pubsub.replay*</include>
+                                        <include>io.github.bijujoseph.salesforce.pubsub.schema*</include>
+                                        <include>io.github.bijujoseph.salesforce.pubsub.subscription*</include>
+                                    </includes>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.90</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.85</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>coverage-data-required-for-classes</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <!-- JaCoCo intentionally skips a missing exec
+                                     file.  Once production classes exist, make
+                                     that state fail instead of silently passing. -->
+                                <condition property="coverage.classes">
+                                    <and>
+                                        <available file="${project.build.outputDirectory}" type="dir"/>
+                                        <resourcecount when="greater" count="0">
+                                            <fileset dir="${project.build.outputDirectory}">
+                                                <include name="**/*.class"/>
+                                            </fileset>
+                                        </resourcecount>
+                                    </and>
+                                </condition>
+                                <condition property="coverage.data">
+                                    <available file="${project.build.directory}/jacoco.exec"/>
+                                </condition>
+                                <fail if="coverage.classes" unless="coverage.data"
+                                      message="JaCoCo execution data is required when core production classes exist."/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

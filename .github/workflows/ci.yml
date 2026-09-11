@@ -12,24 +12,38 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5.6.0
         with:
           distribution: temurin
           java-version: "21"
+          cache: maven
       - name: Validate work plan when present
         if: hashFiles('docs/planning/v0.1-work-plan.yaml') != ''
         run: |
           python -m pip install --disable-pip-version-check --no-input "PyYAML>=6,<7"
           python tools/validate_work_plan.py \
             --plan docs/planning/v0.1-work-plan.yaml
-      - name: Run Maven verify
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v24.2.0
+        with:
+          globs: "**/*.md"
+          config: ".markdownlint-cli2.yaml"
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@v2.9.0
+        with:
+          args: --verbose --no-progress --exclude-mail './**/*.md'
+          fail: true
+      - name: Run clean Maven verify
         run: |
           if [ ! -f pom.xml ]; then
             echo "No root pom.xml found yet; skipping Maven verification."
             exit 0
           fi
-          mvn -B -ntp verify
+          mvn -B -ntp clean verify
+      - name: Verify packaged artifacts and BOM
+        if: hashFiles('pom.xml') != ''
+        run: bash .github/scripts/check-artifacts.sh

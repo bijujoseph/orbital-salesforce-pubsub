@@ -1,0 +1,19 @@
+# Detekt 1.23.x configuration for the Kotlin source sets.
+# Keep the default rule set enabled so new production code is checked without
+# carrying a baseline of findings.  The empty scaffold is a valid zero-file
+# input and therefore passes while still making the policy enforceable later.
+config:
+  validation: true
+
+build:
+  maxIssues: 0
+
+complexity:
+  LongMethod:
+    threshold: 60
+  LargeClass:
+    threshold: 600
+
+style:
+  MagicNumber:
+    active: false
