@@ -76,7 +76,7 @@ required_project_fields:
 issues:
   - key: "OSP-001"
     type: "Epic"
-    title: "Release Orbital Salesforce Pub/Sub Connector 0.1.0"
+    title: "OSP-001 — Release Orbital Salesforce Pub/Sub Connector 0.1.0"
     parent: null
     depends_on: []
     labels: []
@@ -124,7 +124,7 @@ issues:
 
   - key: "OSP-010"
     type: "Feature"
-    title: "Establish the repository and delivery baseline"
+    title: "OSP-010 — Establish the repository and delivery baseline"
     parent: "OSP-001"
     depends_on: []
     labels: []
@@ -174,7 +174,7 @@ issues:
 
   - key: "OSP-011"
     type: "Chore"
-    title: "Bootstrap the Java 21 Maven multi-module reactor"
+    title: "OSP-011 — Bootstrap the Java 21 Maven multi-module reactor"
     parent: "OSP-010"
     depends_on: []
     labels: []
@@ -226,7 +226,7 @@ issues:
 
   - key: "OSP-012"
     type: "Chore"
-    title: "Enforce formatting, analysis, coverage, and security checks"
+    title: "OSP-012 — Enforce formatting, analysis, coverage, and security checks"
     parent: "OSP-010"
     depends_on:
       - "OSP-011"
@@ -279,7 +279,7 @@ issues:
 
   - key: "OSP-013"
     type: "Task"
-    title: "Generate internal Salesforce Pub/Sub gRPC stubs"
+    title: "OSP-013 — Generate internal Salesforce Pub/Sub gRPC stubs"
     parent: "OSP-010"
     depends_on:
       - "OSP-012"
@@ -326,7 +326,7 @@ issues:
 
   - key: "OSP-020"
     type: "Feature"
-    title: "Build the reusable Salesforce Pub/Sub core"
+    title: "OSP-020 — Build the reusable Salesforce Pub/Sub core"
     parent: "OSP-001"
     depends_on:
       - "OSP-010"
@@ -372,7 +372,7 @@ issues:
 
   - key: "OSP-021"
     type: "Task"
-    title: "Implement typed configuration and authentication providers"
+    title: "OSP-021 — Implement typed configuration and authentication providers"
     parent: "OSP-020"
     depends_on:
       - "OSP-013"
@@ -420,7 +420,7 @@ issues:
 
   - key: "OSP-022"
     type: "Task"
-    title: "Implement asynchronous gRPC transport and session metadata"
+    title: "OSP-022 — Implement asynchronous gRPC transport and session metadata"
     parent: "OSP-020"
     depends_on:
       - "OSP-013"
@@ -469,7 +469,7 @@ issues:
 
   - key: "OSP-023"
     type: "Task"
-    title: "Implement topic validation, schema resolution, and bounded cache"
+    title: "OSP-023 — Implement topic validation, schema resolution, and bounded cache"
     parent: "OSP-020"
     depends_on:
       - "OSP-022"
@@ -520,7 +520,7 @@ issues:
 
   - key: "OSP-024"
     type: "Task"
-    title: "Implement neutral event models and Avro codec"
+    title: "OSP-024 — Implement neutral event models and Avro codec"
     parent: "OSP-020"
     depends_on:
       - "OSP-023"
@@ -569,7 +569,7 @@ issues:
 
   - key: "OSP-025"
     type: "Task"
-    title: "Implement typed errors, lifecycle telemetry, and health"
+    title: "OSP-025 — Implement typed errors, lifecycle telemetry, and health"
     parent: "OSP-020"
     depends_on:
       - "OSP-021"
@@ -619,7 +619,7 @@ issues:
 
   - key: "OSP-026"
     type: "Test"
-    title: "Complete the core unit-test contract"
+    title: "OSP-026 — Complete the core unit-test contract"
     parent: "OSP-020"
     depends_on:
       - "OSP-021"
@@ -670,7 +670,7 @@ issues:
 
   - key: "OSP-030"
     type: "Feature"
-    title: "Deliver bounded Platform Event subscriptions"
+    title: "OSP-030 — Deliver bounded Platform Event subscriptions"
     parent: "OSP-001"
     depends_on:
       - "OSP-020"
@@ -716,7 +716,7 @@ issues:
 
   - key: "OSP-031"
     type: "Task"
-    title: "Implement replay models, store, and start precedence"
+    title: "OSP-031 — Implement replay models, store, and start precedence"
     parent: "OSP-030"
     depends_on:
       - "OSP-024"
@@ -765,7 +765,7 @@ issues:
 
   - key: "OSP-032"
     type: "Task"
-    title: "Implement subscription state machine, flow control, and keepalives"
+    title: "OSP-032 — Implement subscription state machine, flow control, and keepalives"
     parent: "OSP-030"
     depends_on:
       - "OSP-031"
@@ -813,7 +813,7 @@ issues:
 
   - key: "OSP-033"
     type: "Task"
-    title: "Implement Subscribe RPC orchestration and close semantics"
+    title: "OSP-033 — Implement Subscribe RPC orchestration and close semantics"
     parent: "OSP-030"
     depends_on:
       - "OSP-022"
@@ -864,7 +864,7 @@ issues:
 
   - key: "OSP-034"
     type: "Task"
-    title: "Implement invalid-replay policy"
+    title: "OSP-034 — Implement invalid-replay policy"
     parent: "OSP-030"
     depends_on:
       - "OSP-031"
@@ -912,7 +912,7 @@ issues:
 
   - key: "OSP-035"
     type: "Task"
-    title: "Implement reconnect, backoff, and session refresh"
+    title: "OSP-035 — Implement reconnect, backoff, and session refresh"
     parent: "OSP-030"
     depends_on:
       - "OSP-021"
@@ -963,7 +963,7 @@ issues:
 
   - key: "OSP-036"
     type: "Test"
-    title: "Complete subscription state, replay, and resilience tests"
+    title: "OSP-036 — Complete subscription state, replay, and resilience tests"
     parent: "OSP-030"
     depends_on:
       - "OSP-031"
@@ -1014,7 +1014,7 @@ issues:
 
   - key: "OSP-040"
     type: "Feature"
-    title: "Publish events and prove the standalone CLI"
+    title: "OSP-040 — Publish events and prove the standalone CLI"
     parent: "OSP-001"
     depends_on:
       - "OSP-020"
@@ -1061,7 +1061,7 @@ issues:
 
   - key: "OSP-041"
     type: "Task"
-    title: "Implement unary Platform Event publishing"
+    title: "OSP-041 — Implement unary Platform Event publishing"
     parent: "OSP-040"
     depends_on:
       - "OSP-022"
@@ -1112,7 +1112,7 @@ issues:
 
   - key: "OSP-042"
     type: "Task"
-    title: "Implement standalone Pub/Sub CLI commands"
+    title: "OSP-042 — Implement standalone Pub/Sub CLI commands"
     parent: "OSP-040"
     depends_on:
       - "OSP-033"
@@ -1161,7 +1161,7 @@ issues:
 
   - key: "OSP-043"
     type: "Test"
-    title: "Validate core and CLI against a non-production Salesforce org"
+    title: "OSP-043 — Validate core and CLI against a non-production Salesforce org"
     parent: "OSP-040"
     depends_on:
       - "OSP-026"
@@ -1211,7 +1211,7 @@ issues:
 
   - key: "OSP-050"
     type: "Feature"
-    title: "Integrate the thin OrbitalHQ adapter"
+    title: "OSP-050 — Integrate the thin OrbitalHQ adapter"
     parent: "OSP-001"
     depends_on:
       - "OSP-040"
@@ -1258,7 +1258,7 @@ issues:
 
   - key: "OSP-060"
     type: "Feature"
-    title: "Verify protocol and Orbital behavior end to end"
+    title: "OSP-060 — Verify protocol and Orbital behavior end to end"
     parent: "OSP-001"
     depends_on:
       - "OSP-030"
@@ -1309,7 +1309,7 @@ issues:
 
   - key: "OSP-061"
     type: "Test"
-    title: "Build the complete in-process Pub/Sub protocol suite"
+    title: "OSP-061 — Build the complete in-process Pub/Sub protocol suite"
     parent: "OSP-040"
     depends_on:
       - "OSP-026"
@@ -1358,7 +1358,7 @@ issues:
 
   - key: "OSP-062"
     type: "Test"
-    title: "Complete Orbital adapter tests and local smoke environment"
+    title: "OSP-062 — Complete Orbital adapter tests and local smoke environment"
     parent: "OSP-060"
     depends_on:
       - "OSP-052"
@@ -1413,7 +1413,7 @@ issues:
 
   - key: "OSP-063"
     type: "Test"
-    title: "Run real Salesforce and Orbital v0.1 acceptance tests"
+    title: "OSP-063 — Run real Salesforce and Orbital v0.1 acceptance tests"
     parent: "OSP-060"
     depends_on:
       - "OSP-043"
@@ -1463,7 +1463,7 @@ issues:
 
   - key: "OSP-070"
     type: "Feature"
-    title: "Document integration and operating contracts"
+    title: "OSP-070 — Document integration and operating contracts"
     parent: "OSP-001"
     depends_on:
       - "OSP-050"
@@ -1511,7 +1511,7 @@ issues:
 
   - key: "OSP-071"
     type: "Documentation"
-    title: "Write architecture, configuration, replay, operations, and troubleshooting guides"
+    title: "OSP-071 — Write architecture, configuration, replay, operations, and troubleshooting guides"
     parent: "OSP-070"
     depends_on:
       - "OSP-051"
@@ -1565,7 +1565,7 @@ issues:
 
   - key: "OSP-072"
     type: "Documentation"
-    title: "Deliver the Orbital-first README and examples"
+    title: "OSP-072 — Deliver the Orbital-first README and examples"
     parent: "OSP-070"
     depends_on:
       - "OSP-062"
@@ -1616,7 +1616,7 @@ issues:
 
   - key: "OSP-080"
     type: "Feature"
-    title: "Prepare and publish the 0.1.0 release"
+    title: "OSP-080 — Prepare and publish the 0.1.0 release"
     parent: "OSP-001"
     depends_on:
       - "OSP-010"
@@ -1666,7 +1666,7 @@ issues:
 
   - key: "OSP-081"
     type: "Chore"
-    title: "Complete open-source governance and security hygiene"
+    title: "OSP-081 — Complete open-source governance and security hygiene"
     parent: "OSP-080"
     depends_on:
       - "OSP-012"
@@ -1720,7 +1720,7 @@ issues:
 
   - key: "OSP-082"
     type: "Task"
-    title: "Configure Maven Central and supply-chain release automation"
+    title: "OSP-082 — Configure Maven Central and supply-chain release automation"
     parent: "OSP-080"
     depends_on:
       - "OSP-011"
@@ -1773,7 +1773,7 @@ issues:
 
   - key: "OSP-083"
     type: "Task"
-    title: "Verify and publish the documented 0.1.0 release"
+    title: "OSP-083 — Verify and publish the documented 0.1.0 release"
     parent: "OSP-080"
     depends_on:
       - "OSP-063"
@@ -1827,7 +1827,7 @@ issues:
 
   - key: "OSP-051"
     type: "Spike"
-    title: "Determine supported Orbital source acknowledgement semantics"
+    title: "OSP-051 — Determine supported Orbital source acknowledgement semantics"
     parent: "OSP-050"
     depends_on:
       - "OSP-043"
@@ -1876,7 +1876,7 @@ issues:
 
   - key: "OSP-052"
     type: "Task"
-    title: "Implement Taxi annotations and declaration validation"
+    title: "OSP-052 — Implement Taxi annotations and declaration validation"
     parent: "OSP-050"
     depends_on:
       - "OSP-051"
@@ -1925,7 +1925,7 @@ issues:
 
   - key: "OSP-053"
     type: "Task"
-    title: "Implement named connections and OperationInvoker routing"
+    title: "OSP-053 — Implement named connections and OperationInvoker routing"
     parent: "OSP-050"
     depends_on:
       - "OSP-021"
@@ -1975,7 +1975,7 @@ issues:
 
   - key: "OSP-054"
     type: "Task"
-    title: "Map Salesforce events, publish payloads, and metadata"
+    title: "OSP-054 — Map Salesforce events, publish payloads, and metadata"
     parent: "OSP-050"
     depends_on:
       - "OSP-024"
@@ -2026,7 +2026,7 @@ issues:
 
   - key: "OSP-055"
     type: "Task"
-    title: "Implement Orbital stream lifecycle and truthful checkpoint behavior"
+    title: "OSP-055 — Implement Orbital stream lifecycle and truthful checkpoint behavior"
     parent: "OSP-050"
     depends_on:
       - "OSP-031"
@@ -2080,7 +2080,7 @@ issues:
 
   - key: "OSP-056"
     type: "Task"
-    title: "Bridge core telemetry to Orbital tracing, metrics, and health"
+    title: "OSP-056 — Bridge core telemetry to Orbital tracing, metrics, and health"
     parent: "OSP-050"
     depends_on:
       - "OSP-025"
