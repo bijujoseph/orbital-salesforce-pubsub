@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   merge:
-    if: github.event.review.state == 'approved'
+    if: github.event.review.state == 'APPROVED'
     runs-on: ubuntu-latest
     steps:
       - name: Enable auto-merge (squash)
