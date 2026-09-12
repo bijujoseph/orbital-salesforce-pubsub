@@ -17,6 +17,7 @@
 package io.github.bijujoseph.salesforce.pubsub.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.bijujoseph.salesforce.pubsub.error.ConfigurationException;
@@ -105,5 +106,20 @@ class ConfigurationTest {
     assertThrows(ConfigurationException.class, () -> new EndpointConfig(" ", 7443));
     assertThrows(ConfigurationException.class, () -> new EndpointConfig("host", 0));
     assertThrows(ConfigurationException.class, () -> new EndpointConfig("host", 65_536));
+  }
+
+  @Test
+  void endpointDiagnosticsDoNotExposeCredentialBearingHosts() {
+    EndpointConfig endpoint =
+        new EndpointConfig(
+            "diagnostic-user:diagnostic-password@example.com?token=query-secret", 7443);
+    SalesforcePubSubConfig config =
+        new SalesforcePubSubConfig(
+            "connection", endpoint, FlowControlOptions.defaults(), RetryOptions.defaults());
+
+    assertEquals("EndpointConfig[host=<redacted>, port=7443]", endpoint.toString());
+    assertFalse(config.toString().contains("diagnostic-user"));
+    assertFalse(config.toString().contains("diagnostic-password"));
+    assertFalse(config.toString().contains("query-secret"));
   }
 }

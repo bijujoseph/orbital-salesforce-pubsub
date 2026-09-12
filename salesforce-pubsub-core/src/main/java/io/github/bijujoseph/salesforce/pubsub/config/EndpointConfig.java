@@ -35,6 +35,11 @@ public record EndpointConfig(String host, int port) {
     return new EndpointConfig(DEFAULT_HOST, DEFAULT_PORT);
   }
 
+  @Override
+  public String toString() {
+    return "EndpointConfig[host=<redacted>, port=" + port + "]";
+  }
+
   private static String requireNonBlank(String value, String field) {
     if (value == null || value.isBlank()) {
       throw new ConfigurationException("Missing " + field);
