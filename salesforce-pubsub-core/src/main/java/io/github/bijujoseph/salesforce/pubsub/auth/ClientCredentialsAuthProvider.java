@@ -23,6 +23,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -38,6 +39,7 @@ import java.util.concurrent.CompletionStage;
 public final class ClientCredentialsAuthProvider implements SalesforceAuthProvider {
 
   private static final String TOKEN_PATH = "/services/oauth2/token";
+  private static final Duration AUTH_REQUEST_TIMEOUT = Duration.ofSeconds(30);
 
   private final URI tokenEndpoint;
   private final String clientId;
@@ -47,7 +49,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
   private CompletableFuture<SalesforceSession> inFlight;
 
   public ClientCredentialsAuthProvider(String loginUrl, String clientId, String clientSecret) {
-    this(loginUrl, clientId, clientSecret, HttpClient.newHttpClient());
+    this(loginUrl, clientId, clientSecret, defaultHttpClient());
   }
 
   public ClientCredentialsAuthProvider(
@@ -56,14 +58,14 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
   }
 
   public ClientCredentialsAuthProvider(URI loginUrl, String clientId, String clientSecret) {
-    this(loginUrl, clientId, clientSecret, HttpClient.newHttpClient());
+    this(loginUrl, clientId, clientSecret, defaultHttpClient());
   }
 
   public ClientCredentialsAuthProvider(
       URI loginUrl, String clientId, String clientSecret, HttpClient httpClient) {
     this.tokenEndpoint = tokenEndpoint(loginUrl);
     this.clientId = requireNonBlank(clientId, "client ID");
-    this.clientSecret = requireNonBlank(clientSecret, "client secret");
+    this.clientSecret = requireNonBlankExact(clientSecret, "client secret");
     if (httpClient == null) {
       throw new AuthenticationException("Missing HTTP client");
     }
@@ -115,6 +117,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
             + formEncode(clientSecret);
     HttpRequest request =
         HttpRequest.newBuilder(tokenEndpoint)
+            .timeout(AUTH_REQUEST_TIMEOUT)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("Accept", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(form, StandardCharsets.UTF_8))
@@ -168,11 +171,14 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
   }
 
   private static URI tokenEndpoint(URI loginUrl) {
+    String scheme = loginUrl == null ? null : loginUrl.getScheme();
+    String host = loginUrl == null ? null : loginUrl.getHost();
     if (loginUrl == null
-        || !("http".equalsIgnoreCase(loginUrl.getScheme())
-            || "https".equalsIgnoreCase(loginUrl.getScheme()))
-        || loginUrl.getHost() == null) {
-      throw new AuthenticationException("Salesforce login URL must be an absolute HTTP(S) URL");
+        || !("https".equalsIgnoreCase(scheme)
+            || ("http".equalsIgnoreCase(scheme) && "localhost".equalsIgnoreCase(host)))
+        || host == null) {
+      throw new AuthenticationException(
+          "Salesforce login URL must use HTTPS or HTTP on localhost for testing");
     }
     String path = loginUrl.getPath();
     if (path != null && path.endsWith(TOKEN_PATH)) {
@@ -216,11 +222,22 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
     return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
   }
 
+  private static HttpClient defaultHttpClient() {
+    return HttpClient.newBuilder().connectTimeout(AUTH_REQUEST_TIMEOUT).build();
+  }
+
   private static String requireNonBlank(String value, String field) {
     if (value == null || value.isBlank()) {
       throw new AuthenticationException("Missing " + field);
     }
     return value.trim();
+  }
+
+  private static String requireNonBlankExact(String value, String field) {
+    if (value == null || value.isBlank()) {
+      throw new AuthenticationException("Missing " + field);
+    }
+    return value;
   }
 
   private static boolean isBlank(String value) {
@@ -265,7 +282,15 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
         skipWhitespace();
         expect(':');
         skipWhitespace();
-        String value = consumeLiteral("null") ? null : parseString();
+        String value;
+        if (position < json.length() && json.charAt(position) == '"') {
+          value = parseString();
+        } else if (consumeLiteral("null")) {
+          value = null;
+        } else {
+          skipValue();
+          value = null;
+        }
         if (fields.containsKey(name)) {
           throw new IllegalArgumentException("Duplicate JSON field");
         }
@@ -309,6 +334,101 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       }
       position += literal.length();
       return true;
+    }
+
+    private void skipValue() {
+      if (position >= json.length()) {
+        throw new IllegalArgumentException("Missing JSON value");
+      }
+      switch (json.charAt(position)) {
+        case '"' -> parseString();
+        case '{' -> skipObject();
+        case '[' -> skipArray();
+        case 't' -> requireLiteral("true");
+        case 'f' -> requireLiteral("false");
+        case 'n' -> requireLiteral("null");
+        default -> skipNumber();
+      }
+    }
+
+    private void skipObject() {
+      expect('{');
+      skipWhitespace();
+      if (consume('}')) {
+        return;
+      }
+      while (true) {
+        parseString();
+        skipWhitespace();
+        expect(':');
+        skipWhitespace();
+        skipValue();
+        skipWhitespace();
+        if (consume('}')) {
+          return;
+        }
+        expect(',');
+        skipWhitespace();
+      }
+    }
+
+    private void skipArray() {
+      expect('[');
+      skipWhitespace();
+      if (consume(']')) {
+        return;
+      }
+      while (true) {
+        skipValue();
+        skipWhitespace();
+        if (consume(']')) {
+          return;
+        }
+        expect(',');
+        skipWhitespace();
+      }
+    }
+
+    private void requireLiteral(String literal) {
+      if (!consumeLiteral(literal)) {
+        throw new IllegalArgumentException("Invalid JSON literal");
+      }
+    }
+
+    private void skipNumber() {
+      int start = position;
+      consume('-');
+      if (consume('0')) {
+        if (position < json.length() && Character.isDigit(json.charAt(position))) {
+          throw new IllegalArgumentException("Invalid JSON number");
+        }
+      } else {
+        requireDigits();
+      }
+      if (consume('.')) {
+        requireDigits();
+      }
+      if (position < json.length()
+          && (json.charAt(position) == 'e' || json.charAt(position) == 'E')) {
+        position++;
+        if (!consume('+')) {
+          consume('-');
+        }
+        requireDigits();
+      }
+      if (position == start) {
+        throw new IllegalArgumentException("Invalid JSON value");
+      }
+    }
+
+    private void requireDigits() {
+      int start = position;
+      while (position < json.length() && Character.isDigit(json.charAt(position))) {
+        position++;
+      }
+      if (position == start) {
+        throw new IllegalArgumentException("Invalid JSON number");
+      }
     }
 
     private boolean consume(char expected) {

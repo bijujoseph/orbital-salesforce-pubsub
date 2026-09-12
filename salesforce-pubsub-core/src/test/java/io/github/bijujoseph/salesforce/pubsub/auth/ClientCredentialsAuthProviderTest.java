@@ -45,6 +45,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import org.junit.jupiter.api.AfterEach;
@@ -101,6 +102,31 @@ class ClientCredentialsAuthProviderTest {
   }
 
   @Test
+  void postsExactClientCredentialsWithFormEncoding() throws Exception {
+    AtomicReference<String> requestBody = new AtomicReference<>();
+    server.removeContext("/services/oauth2/token");
+    server.createContext(
+        "/services/oauth2/token",
+        exchange -> {
+          requestBody.set(
+              new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+          respond(
+              exchange,
+              200,
+              "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\"}");
+        });
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client +&=", " secret +&= ");
+
+    provider.authenticate().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+    assertEquals(
+        "grant_type=client_credentials&client_id=client+%2B%26%3D&client_secret=+secret+%2B%26%3D+",
+        requestBody.get());
+  }
+
+  @Test
   void mapsUnsuccessfulResponseWithoutLeakingResponseBody() {
     server.removeContext("/services/oauth2/token");
     server.createContext(
@@ -143,6 +169,12 @@ class ClientCredentialsAuthProviderTest {
     assertThrows(
         AuthenticationException.class,
         () -> new ClientCredentialsAuthProvider("ftp://localhost", "client", "secret"));
+    assertThrows(
+        AuthenticationException.class,
+        () -> new ClientCredentialsAuthProvider("http://example.com", "client", "secret"));
+    assertEquals(
+        "ClientCredentialsAuthProvider[tokenEndpoint=https://example.com/services/oauth2/token, clientId=<redacted>]",
+        new ClientCredentialsAuthProvider("https://example.com", "client", "secret").toString());
     assertThrows(
         AuthenticationException.class,
         () -> new ClientCredentialsAuthProvider("http://localhost", null, "secret"));
@@ -282,9 +314,9 @@ class ClientCredentialsAuthProviderTest {
 
   @Test
   void synchronousClientFailureReturnsSanitizedFailedStage() {
+    SynchronouslyFailingHttpClient httpClient = new SynchronouslyFailingHttpClient();
     ClientCredentialsAuthProvider provider =
-        new ClientCredentialsAuthProvider(
-            "http://localhost", "client", "secret", new SynchronouslyFailingHttpClient());
+        new ClientCredentialsAuthProvider("http://localhost", "client", "secret", httpClient);
 
     CompletionException failure =
         assertThrows(
@@ -293,6 +325,10 @@ class ClientCredentialsAuthProviderTest {
         assertInstanceOf(AuthenticationException.class, failure.getCause());
     assertEquals("Salesforce authentication request failed", authenticationException.getMessage());
     assertFalse(authenticationException.getMessage().contains("synchronous-client-secret"));
+    assertEquals(Duration.ofSeconds(30), httpClient.lastRequest.timeout().orElseThrow());
+    assertThrows(
+        CompletionException.class, () -> provider.authenticate().toCompletableFuture().join());
+    assertEquals(2, httpClient.attempts.get());
   }
 
   @Test
@@ -360,6 +396,33 @@ class ClientCredentialsAuthProviderTest {
                 CompletionException.class,
                 () -> trailingContent.authenticate().toCompletableFuture().join())
             .getCause());
+  }
+
+  @Test
+  void acceptsAndIgnoresValidNonStringOAuthMetadata() throws Exception {
+    replaceResponse(
+        200,
+        "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\",\"expires_in\":3600,\"zero\":0,\"negative\":-1,\"decimal\":1.5,\"positive_exponent\":1E+2,\"negative_exponent\":1e-2,\"active\":true,\"metadata\":{\"instance_url\":\"https://wrong-instance.example\",\"enabled\":false},\"scopes\":[\"one\",\"two\",null,{},[]]}");
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client", "secret");
+
+    SalesforceSession session =
+        provider.authenticate().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+    assertEquals("token", session.accessToken());
+    assertEquals("https://instance.example", session.instanceUrl());
+  }
+
+  @Test
+  void rejectsInvalidTopLevelJsonShapesAndNumbers() {
+    assertInvalidOAuthResponse("{}");
+    assertInvalidOAuthResponse(
+        "{\"access_token\":\"first\",\"access_token\":\"second\",\"instance_url\":\"https://instance.example\"}");
+    assertInvalidOAuthResponse("{true:null}");
+    assertInvalidOAuthResponse("{\"access_token\":\"unterminated}");
+    assertInvalidOAuthResponse(
+        "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\",\"invalid_number\":01}");
   }
 
   @Test
@@ -455,6 +518,19 @@ class ClientCredentialsAuthProviderTest {
     server.createContext("/services/oauth2/token", exchange -> respond(exchange, status, body));
   }
 
+  private void assertInvalidOAuthResponse(String body) {
+    replaceResponse(200, body);
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client", "secret");
+    assertInstanceOf(
+        AuthenticationException.class,
+        assertThrows(
+                CompletionException.class,
+                () -> provider.authenticate().toCompletableFuture().join())
+            .getCause());
+  }
+
   private static void respond(HttpExchange exchange, int status, String body) throws IOException {
     byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
     exchange.sendResponseHeaders(status, bytes.length);
@@ -465,6 +541,8 @@ class ClientCredentialsAuthProviderTest {
 
   private static final class SynchronouslyFailingHttpClient extends HttpClient {
     private final HttpClient delegate = HttpClient.newHttpClient();
+    private final AtomicInteger attempts = new AtomicInteger();
+    private HttpRequest lastRequest;
 
     @Override
     public Optional<CookieHandler> cookieHandler() {
@@ -521,6 +599,8 @@ class ClientCredentialsAuthProviderTest {
     @Override
     public <T> CompletableFuture<HttpResponse<T>> sendAsync(
         HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
+      lastRequest = request;
+      attempts.incrementAndGet();
       throw new IllegalArgumentException("synchronous-client-secret");
     }
 
