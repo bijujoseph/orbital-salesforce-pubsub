@@ -1,138 +1,137 @@
 # Orbital Salesforce Pub/Sub Connector
 
-## Canonical product source of truth
+## Product authority
 
-The only authoritative source for product requirements, release scope,
-architecture, and implementation sequencing is:
-
-.local/planning/orbital-salesforce-pubsub-final-blueprint-reviewed.md
-
-This file is intentionally ignored by Git.
-
-Agents may read it locally. Agents must not edit, commit, or publish the
-blueprint itself or substantial verbatim excerpts from it.
-
-The YAML work plan, GitHub Issues, Project items, and pull requests are derived
-execution and tracking artifacts. They may summarize the blueprint but must
-not add, remove, or override its requirements. If a derived artifact conflicts
-with the blueprint, stop and report the conflict. Work may resume only after
-the derived artifact is corrected through its applicable workflow.
-
-Do not use README text, old chat history, older planning documents, generated
-issue text, or prior plans as alternate product requirements.
+- `.local/planning/orbital-salesforce-pubsub-final-blueprint-reviewed.md` is the
+  sole authority for requirements, scope, architecture, and sequencing. It is
+  intentionally Git-ignored. Read it; never edit, commit, publish, or quote
+  substantial excerpts from it.
+- The YAML plan, GitHub Issues, Project items, and PRs are derived artifacts.
+  They may summarize but never alter the blueprint. Stop on any conflict until
+  the applicable workflow corrects the derived artifact.
+- README text, chat history, older plans, and generated issue text are not
+  alternate requirements.
 
 ## GitHub operations
 
-Use the OAuth-authenticated `github` MCP for GitHub API operations; do not use
-PATs, `GH_TOKEN`, `gh`, raw HTTP/GraphQL calls, or credential-bearing scripts.
-Standard Git commands may publish an issue branch through the repository's
-existing authenticated remote; never add or change Git credentials.
-Only `project_item_writer`, following the `github-project-writing` skill, may
-mutate GitHub Issues or Project data.
-
-At most one GitHub-mutating role or process may be active across all mutations
-at a time; do not issue parallel mutations or create retry storms. Each role
-may mutate only the GitHub resources within its stated authority. On a
-confirmed GitHub rate-limit response, wait 2 minutes, resume from the failed
-operation's checkpoint, and retry no more than 8 times. Report the operation if
-it still cannot complete. Non-rate-limit errors are not eligible for this
-retry policy; report and diagnose them normally.
+- Use the OAuth-authenticated `github` MCP for GitHub API operations. Never use
+  PATs, `GH_TOKEN`, `gh`, raw HTTP/GraphQL, or credential-bearing scripts.
+- Standard Git may publish through the existing authenticated remote. Never
+  add or change Git credentials.
+- Only `project_item_writer`, following `github-project-writing`, may mutate
+  Issues or Project data.
+- Allow only one GitHub-mutating role/process at a time. Each role stays within
+  its stated authority; never run parallel mutations or retry storms.
+- On a confirmed rate limit, wait 2 minutes, resume from the failed checkpoint,
+  and retry at most 8 times. Report failure after the eighth retry. Do not apply
+  this policy to other errors; diagnose and report them normally.
 
 ## Planning workflow
 
-1. `project_planner` reads the local blueprint and defines the work items in
-   `docs/planning/v0.1-work-plan.yaml`.
-2. The planner validates the draft plan; a human reviews and explicitly
-   approves it.
-3. `project_item_writer` preflights the approved plan and presents a mutation
-   preview.
+1. `project_planner` derives `docs/planning/v0.1-work-plan.yaml` from the local
+   blueprint and validates it.
+2. A human explicitly approves the plan.
+3. `project_item_writer` preflights it and presents a mutation preview.
 4. A human explicitly approves the preview.
-5. `project_item_writer` creates/updates repository issues, links them to the Project, applies only the approved fields and relationships, then verifies and reports the result. Project-only draft issues are not work items for this workflow.
+5. `project_item_writer` applies and verifies only the approved Issues, Project
+   fields, links, and relationships. Project-only drafts are not work items.
 
 ## Implementation workflow
 
-1. The orchestrator assigns one unblocked Ready work item to a dedicated Git
-   worktree and issue branch. Based on the dependency of work items, the orchestrator will assign the work to dedicated agents outlined below.
-2. `coder` implements only that work item in the assigned worktree.
-3. `tester` defines expected-behavior cases from the assigned issue and
-   canonical blueprint before reading the implementation, then independently
-   verifies the work. `task_reviewer` evaluates the completed task. `coder`,
-   `tester`, and `task_reviewer` never stage, commit, or push.
-4. After a `READY FOR REVIEW` verdict, standing authorization permits
+1. Select one approved GitHub Issue that is unblocked and manually set to
+   `Ready`. Assign it a dedicated issue branch, worktree, and `coder`. Never
+   implement in the shared/default worktree.
+2. Before editing, read the issue and applicable blueprint sections. The issue
+   bounds execution; the blueprint governs requirements. Stop on ambiguity,
+   missing prerequisites, or conflicts among blueprint, plan, issue, and code.
+   Do not guess or widen scope. Apply every relevant architecture, API,
+   security, delivery, test, and documentation rule from the blueprint.
+3. `coder` implements only that issue. `tester` defines expected behavior from
+   the issue and blueprint before reading the implementation, then verifies it
+   independently. `task_reviewer` reviews the completed task. These roles never
+   stage, commit, or push.
+4. Fresh tester evidence plus `READY FOR REVIEW` authorizes
    `pull_request_opener`—the only role allowed to stage, commit, or push—to
-   publish the exact reviewed paths from the exact current worktree diff and
-   open or update its PR without another human approval. It requires fresh
-   tester evidence and `READY FOR REVIEW`, and must keep the same issue
-   branch/worktree and PR.
-5. After the PR is opened, the orchestrator performs one initial read, then
-   polls its status via read-only `github` MCP operations no more frequently
-   than once per minute, for a single 10-minute elapsed wall-clock cap per
-   monitoring turn/window. Polls must cover CI checks, review completion,
-   current-head review comments, approval, mergeability, and external
-   auto-merge, always scoped to that PR's exact issue branch/worktree. Use
-   actual check-run context names when evaluating required checks; do not infer
-   them from workflow or job display labels.
-   - Merged -> verify the PR is merged, its linked issue is `Closed`, and its
-     Project status is `Done` when that field is configured. Report any status
-     mismatch without mutating outside the responsible role's authority.
-     Fast-forward local `main` to the merged remote state, then safely clean
-     up that issue's worktree and branch.
-   - Open with new current-head Copilot or human review comments requesting
-     changes -> invoke `coder`, pinned to the same issue branch/worktree, to
-     classify every comment as valid, invalid, or already addressed against
-     the assigned issue and canonical blueprint. Change code only for valid
-     findings; rejected findings require concrete repository, test, or
-     authoritative-documentation evidence. Do not reopen user-rejected or
-     resolved/outdated findings without new evidence. `coder` applies only the
-     smallest accepted fixes and makes no unrelated changes. For review
-     deltas, `tester` defines focused checks before inspecting the delta,
-     independently verifies every `Valid` disposition, and produces fresh
-     evidence before `task_reviewer` or publication. `task_reviewer` then
-     re-checks it and reports an updated verdict without editing. After
-     `READY FOR REVIEW`, `pull_request_opener` publishes the reviewed changes
-     to the same branch and PR. Before requesting Copilot review, inspect the
-     current-head SHA's reviews and checks; skip the request if one was already
-     requested, is in progress, or is complete. Request exactly one Copilot
-     review for each new head SHA; never duplicate a request for the same SHA.
-   - At the 10-minute cap, stop polling and report the exact pending PR state
-     for human follow-up. Do not extend the cap through additional rounds.
-     The monitoring window starts with the initial read and is not reset by a
-     push, agent restart, handoff, or context compaction. Only an explicit
-     later user request to resume after stopping starts a new window.
-   - Agents never merge PRs. GitHub/Copilot may approve and auto-merge them
-     externally.
+   publish the exact reviewed current-worktree diff and open/update the same
+   branch/worktree/PR. No additional human approval is required unless a
+   current-head Copilot human-review escalation contains no concrete change or
+   suggestion that the agents can implement.
+5. After opening a PR, the orchestrator performs an initial read and monitors
+   it with read-only `github` MCP calls at least 1 minute apart. Every poll must
+   cover actual check-run contexts, review completion, unresolved current-head
+   comments, approval, mergeability, and external auto-merge for the exact
+   issue branch/worktree. Never infer check contexts from workflow/job labels.
+   - **Merged:** verify the PR is merged, its issue is `Closed`, and configured
+     Project status is `Done`. Report mismatches without exceeding role
+     authority. Fast-forward local `main`, then safely remove that issue's
+     worktree and branch.
+   - **Actionable current-head review:** inspect current-head review bodies,
+     summaries, suppressed findings, and review threads; a successful review
+     check means the automation completed, not that the PR was approved.
+     Copilot recommendations may be accepted or disagreed with. No explorer
+     step is required when agents accept and will implement a recommendation.
+     If `coder` intends
+     to classify a Copilot recommendation as `Invalid` or `Already addressed`,
+     do not communicate that disagreement yet. First invoke `explorer` to trace
+     the finding against the affected code paths, tests, issue, blueprint, and
+     authoritative documentation when needed, then give that evidence to
+     `coder` for reconsideration. If explorer supports Copilot or evidence is
+     inconclusive, classify finding `Valid` and implement it.
+     Disagreement is allowed only when the explorer finds clear contrary
+     evidence, `coder` addresses it, and `task_reviewer` accepts it. Invoke
+     `coder` in the same worktree. Classify every eligible finding as `Valid`,
+     `Invalid`, or `Already addressed` against the issue and blueprint. Change
+     code only for `Valid` findings. Support rejections with repository, test,
+     or authoritative documentation evidence, including explorer handoff.
+     Ignore resolved/outdated comments; do not reopen user-rejected findings
+     without new evidence. Apply only minimal fixes.
+     Before inspecting the delta, `tester` defines focused checks; it then
+     verifies every `Valid` disposition and produces fresh evidence.
+     `task_reviewer` re-reviews without editing. After `READY FOR REVIEW`,
+     `pull_request_opener` publishes to the same branch/PR.
+   - **Copilot human-review escalation:** a blue `Needs a closer look` outcome
+     overrides normal agent-disagreement handling, even without an inline
+     thread. Classify every concrete change or suggestion included in that
+     escalation as `Valid (human-review-escalated)`. Do not disagree, classify
+     it `Already addressed`, or invoke `explorer` to challenge it. `coder` must
+     implement the smallest in-scope fix, `tester` must run focused regression
+     coverage, and `task_reviewer` must approve the exact delta. After those
+     gates pass, `pull_request_opener` must commit and push the reviewed delta
+     to the same PR without additional human approval, then trigger one
+     rereview for the new head. Bind this action
+     to exact PR number, Copilot review ID, and reviewed head SHA. Passing checks
+     or resolved/outdated threads do not replace this round. If blue outcome
+     contains no concrete implementable change or suggestion, block `READY FOR
+     REVIEW`, publication, and automated merge readiness until human explicitly
+     accepts or redirects risk.
+   - **Copilot review:** before requesting one, inspect reviews and checks for
+     the current head SHA. Skip if already requested, running, or complete.
+     After a reviewed push, request exactly once for the new head SHA when an
+     automatic review is not already queued, running, or complete.
+   - **Rolling window:** the initial read starts a 10-minute window. Actionable
+     comments received before expiry authorize that full fix/test/review/publish
+     round, subject to the hard cap. A reviewed push is the only reset and
+     starts a new 10-minute window for the new head. Polls, retries, restarts,
+     handoffs, and context compaction do not reset it. If it expires with no
+     review round active and no new reviewed push, stop and report exact state.
+   - **Hard cap:** the initial read also starts a 60-minute cap for the complete
+     review/fix/publish exchange. Nothing resets it. At expiry, stop and report
+     exact head, CI, review, approval, mergeability, and merge state. Only an
+     explicit later request to resume starts new 60- and 10-minute clocks.
+   - Agents never merge. GitHub/Copilot may approve and auto-merge externally.
 6. `final_reviewer` evaluates milestone or release readiness across completed
    tasks.
 
-## Implementation authority
+## Quality gates
 
-- Work on exactly one approved GitHub Issue that is unblocked and manually
-  moved to Ready.
-- Work only in the branch and worktree assigned to that issue. Do not switch or
-  reuse the shared/default worktree for implementation.
-- Read the assigned issue and the relevant canonical-blueprint sections before
-  implementation.
-- Treat the issue as a bounded execution unit derived from the blueprint, not
-  as authority to change product requirements.
-- Stop and report any conflict between the issue, work plan, implementation,
-  and blueprint. Do not resolve product ambiguity by guessing.
-- Follow all architecture, API, security, delivery-semantics, testing, and
-  documentation requirements in the blueprint that apply to the assigned work.
-
-## Quality rules
-
-- Keep each PR focused on one GitHub issue.
-- Use the issue key in the branch and PR title.
-- Run every verification required by the assigned issue and the applicable
-  canonical-blueprint sections.
-- Never weaken, skip, or delete tests just to obtain a passing build.
-- Ordinary PR CI must complete end-to-end in under 5 minutes. Heavy full-
-  repository scans, including NVD-backed scans, belong in scheduled or manual
-  workflows with the blueprint-approved fast equivalent PR gates; moving a
-  scan must not weaken required tests or security coverage.
-- Local verification uses JDK 25 only. GitHub CI must explicitly provision JDK
-  21 for the project's CI compatibility contract.
-- After CI completes, calculate the PR critical-path elapsed time from the
-  first relevant check start to the final required check completion. Treat
-  5 minutes or longer as a workflow defect, and verify the CI workflow actually
-  provisions JDK 21 rather than relying on the runner default.
+- Keep each PR to one issue; include its key in branch and PR title.
+- Run every verification required by the issue and applicable blueprint.
+- Never weaken, skip, or delete tests to pass a build.
+- Ordinary PR CI must finish end-to-end in under 5 minutes. Put heavy full-repo
+  scans, including NVD-backed scans, in scheduled/manual workflows with the
+  blueprint-approved fast PR equivalents. Never reduce security or test
+  coverage when moving a scan.
+- Use JDK 25 for local verification. CI must explicitly provision JDK 21.
+- After CI, calculate critical-path time from the first relevant check start to
+  the last required check completion. Treat 5 minutes or more as a workflow
+  defect. Verify CI uses provisioned JDK 21, not the runner default.
