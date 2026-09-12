@@ -53,12 +53,7 @@ public final class SalesforceAvroCodec {
 
   SalesforceAvroCodec(ResolvedSchemaLookup schemaLookup) {
     this.schemaLookup = Objects.requireNonNull(schemaLookup, "schemaLookup");
-    genericData = new GenericData();
-    genericData.addLogicalTypeConversion(new org.apache.avro.data.TimeConversions.DateConversion());
-    genericData.addLogicalTypeConversion(
-        new org.apache.avro.data.TimeConversions.TimestampMillisConversion());
-    genericData.addLogicalTypeConversion(
-        new org.apache.avro.data.TimeConversions.TimestampMicrosConversion());
+    this.genericData = configuredGenericData();
   }
 
   /** Decodes one complete Avro datum with an already-resolved Salesforce schema. */
@@ -84,7 +79,16 @@ public final class SalesforceAvroCodec {
   /** Encodes a neutral event map with an already-resolved Salesforce schema. */
   public byte[] encode(String schemaId, Map<String, Object> payload) {
     try {
-      Schema schema = requireResolvedSchema(schemaId);
+      return encode(schemaId, requireResolvedSchema(schemaId), payload);
+    } catch (EventEncodeException failure) {
+      throw failure;
+    } catch (RuntimeException failure) {
+      throw EventEncodeException.forSchema(schemaId);
+    }
+  }
+
+  byte[] encode(String schemaId, Schema schema, Map<String, Object> payload) {
+    try {
       Objects.requireNonNull(payload, "payload");
       if (schema.getType() != Schema.Type.RECORD) {
         throw new IllegalArgumentException("event schema must be a record");
@@ -99,6 +103,16 @@ public final class SalesforceAvroCodec {
     } catch (IOException | RuntimeException failure) {
       throw EventEncodeException.forSchema(schemaId);
     }
+  }
+
+  private static GenericData configuredGenericData() {
+    GenericData configured = new GenericData();
+    configured.addLogicalTypeConversion(new org.apache.avro.data.TimeConversions.DateConversion());
+    configured.addLogicalTypeConversion(
+        new org.apache.avro.data.TimeConversions.TimestampMillisConversion());
+    configured.addLogicalTypeConversion(
+        new org.apache.avro.data.TimeConversions.TimestampMicrosConversion());
+    return configured;
   }
 
   private Schema requireResolvedSchema(String schemaId) {

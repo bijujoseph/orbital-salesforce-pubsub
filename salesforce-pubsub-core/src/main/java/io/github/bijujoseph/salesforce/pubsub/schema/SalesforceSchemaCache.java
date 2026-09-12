@@ -25,6 +25,7 @@ import io.github.bijujoseph.salesforce.pubsub.telemetry.NoOpSalesforcePubSubTele
 import io.github.bijujoseph.salesforce.pubsub.telemetry.SalesforcePubSubTelemetry;
 import io.github.bijujoseph.salesforce.pubsub.transport.SalesforceEventTransport;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -40,6 +41,7 @@ public final class SalesforceSchemaCache {
   private final SchemaResolver resolver;
   private final SalesforcePubSubTelemetry telemetry;
   private final Cache<String, CompletableFuture<Schema>> cache;
+  private final SalesforceAvroCodec codec;
 
   public SalesforceSchemaCache(SalesforceEventTransport transport) {
     this(transport, null);
@@ -62,6 +64,7 @@ public final class SalesforceSchemaCache {
             .executor(Runnable::run)
             .removalListener(this::recordRemoval)
             .build();
+    this.codec = new SalesforceAvroCodec(this::resolvedSchema);
   }
 
   /** Returns a cached parsed schema or performs one coalesced lookup for the exact schema ID. */
@@ -91,6 +94,16 @@ public final class SalesforceSchemaCache {
       recordTelemetry(telemetry::schemaCacheHit);
     }
     return callerStage(resolved);
+  }
+
+  /**
+   * Resolves and strongly retains a schema through one neutral payload encoding operation.
+   *
+   * <p>The resolved schema is captured directly by the continuation, so a concurrent cache eviction
+   * cannot separate successful resolution from encoding.
+   */
+  public CompletionStage<byte[]> resolveAndEncode(String schemaId, Map<String, Object> payload) {
+    return resolve(schemaId).thenApply(schema -> codec.encode(schemaId, schema, payload));
   }
 
   Schema resolvedSchema(String schemaId) {

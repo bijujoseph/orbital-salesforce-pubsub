@@ -16,11 +16,14 @@
 
 package io.github.bijujoseph.salesforce.pubsub.transport;
 
+import com.google.protobuf.ByteString;
 import com.salesforce.eventbus.protobuf.FetchRequest;
 import com.salesforce.eventbus.protobuf.FetchResponse;
+import com.salesforce.eventbus.protobuf.ProducerEvent;
 import com.salesforce.eventbus.protobuf.PubSubGrpc;
 import com.salesforce.eventbus.protobuf.PublishRequest;
 import com.salesforce.eventbus.protobuf.PublishResponse;
+import com.salesforce.eventbus.protobuf.PublishResult;
 import com.salesforce.eventbus.protobuf.SchemaInfo;
 import com.salesforce.eventbus.protobuf.SchemaRequest;
 import com.salesforce.eventbus.protobuf.TopicInfo;
@@ -35,6 +38,7 @@ import io.github.bijujoseph.salesforce.pubsub.error.SchemaLookupException;
 import io.github.bijujoseph.salesforce.pubsub.error.SubscriptionException;
 import io.github.bijujoseph.salesforce.pubsub.error.TopicNotFoundException;
 import io.github.bijujoseph.salesforce.pubsub.error.TransportException;
+import io.github.bijujoseph.salesforce.pubsub.publish.PublishReceipt;
 import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
 import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorStatus;
 import io.grpc.CallOptions;
@@ -254,6 +258,42 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         .readOnlyStage();
   }
 
+  /**
+   * Sends one already-validated and encoded event through Salesforce's unary Publish RPC.
+   *
+   * <p>This is the protocol-neutral bridge used by the core publisher. It deliberately accepts no
+   * collection and exposes no generated protobuf type.
+   */
+  public CompletionStage<PublishReceipt> publishSingleEvent(
+      String topic, String correlationKey, String schemaId, byte[] payload) {
+    if (topic == null
+        || topic.isBlank()
+        || correlationKey == null
+        || correlationKey.isBlank()
+        || schemaId == null
+        || schemaId.isBlank()
+        || payload == null) {
+      CancellableRpcFuture<PublishReceipt> rejected = new CancellableRpcFuture<>();
+      rejected.completeExceptionally(
+          new PublishException("Validated topic, correlation, schema, and payload are required"));
+      return rejected.readOnlyStage();
+    }
+
+    ProducerEvent event =
+        ProducerEvent.newBuilder()
+            .setId(correlationKey)
+            .setSchemaId(schemaId)
+            .setPayload(ByteString.copyFrom(payload))
+            .build();
+    PublishRequest request =
+        PublishRequest.newBuilder().setTopicName(topic).addEvents(event).build();
+    return this.<PublishResponse, PublishReceipt>invokeUnary(
+            (stub, observer) -> stub.publish(request, observer),
+            response -> validatePublishResponse(topic, correlationKey, response),
+            FailureContext.publish())
+        .readOnlyStage();
+  }
+
   SubscriptionRpc subscribe(StreamObserver<FetchResponse> responseObserver) {
     Objects.requireNonNull(responseObserver, "response observer");
     SubscriptionRpc result =
@@ -357,6 +397,37 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
   private static SchemaMetadata mapSchema(SchemaInfo response) {
     return new SchemaMetadata(response.getSchemaId(), response.getSchemaJson());
+  }
+
+  private static PublishReceipt validatePublishResponse(
+      String topic, String correlationKey, PublishResponse response) {
+    if (response == null || response.getResultsCount() != 1) {
+      throw new PublishException("Salesforce Pub/Sub Publish returned an invalid result count");
+    }
+    PublishResult result = response.getResults(0);
+    if (result.hasError()) {
+      throw new PublishResultFailure(
+          new PublishException(
+              "Salesforce Pub/Sub Publish result failed [code="
+                  + result.getError().getCode()
+                  + "]"));
+    }
+    if (result.getReplayId().isEmpty()) {
+      throw new PublishException("Salesforce Pub/Sub Publish returned an empty replay ID");
+    }
+    if (!correlationKey.equals(result.getCorrelationKey())) {
+      throw new PublishException("Salesforce Pub/Sub Publish returned a correlation mismatch");
+    }
+    return new PublishReceipt(
+        topic,
+        correlationKey,
+        result.getReplayId().toByteArray(),
+        available(response.getSchemaId()),
+        available(response.getRpcId()));
+  }
+
+  private static String available(String value) {
+    return value == null || value.isBlank() ? null : value;
   }
 
   private static SalesforcePubSubException sanitize(Throwable failure) {
@@ -472,7 +543,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         this.response = responseMapper.apply(response);
         receivedResponse = true;
       } catch (RuntimeException exception) {
-        result.failAndCancel(exception, "Invalid unary RPC response");
+        result.failMappedResponse(exception, "Invalid unary RPC response");
       }
     }
 
@@ -644,6 +715,35 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       super.completeExceptionally(sanitized);
     }
 
+    private void failMappedResponse(RuntimeException failure, String reason) {
+      if (failure instanceof PublishResultFailure resultFailure) {
+        failExpectedPublishResult(resultFailure.failure(), reason);
+        return;
+      }
+      if (!(failure instanceof SalesforcePubSubException domainFailure)) {
+        failAndCancel(failure, reason);
+        return;
+      }
+      if (!terminateState()) {
+        return;
+      }
+      report(Status.Code.UNKNOWN, domainFailure);
+      notifyTerminal();
+      cancelClientCall(clientCall.get());
+      cancelRequest(requestStream.get(), reason);
+      super.completeExceptionally(domainFailure);
+    }
+
+    private void failExpectedPublishResult(PublishException failure, String reason) {
+      if (!terminateState()) {
+        return;
+      }
+      notifyTerminal();
+      cancelClientCall(clientCall.get());
+      cancelRequest(requestStream.get(), reason);
+      super.completeExceptionally(failure);
+    }
+
     private static void cancelRequest(ClientCallStreamObserver<?> stream) {
       cancelRequest(stream, "RPC cancelled");
     }
@@ -702,12 +802,16 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private SalesforcePubSubException mapAndReport(Throwable failure) {
       Status.Code code = statusCode(failure);
       SalesforcePubSubException sanitized = mapFailure(code, failureContext);
+      report(code, sanitized);
+      return sanitized;
+    }
+
+    private void report(Status.Code code, SalesforcePubSubException failure) {
       try {
-        failureReporter.accept(code, sanitized);
+        failureReporter.accept(code, failure);
       } catch (RuntimeException ignored) {
         // Diagnostics must never alter RPC completion.
       }
-      return sanitized;
     }
 
     private void notifySuccess() {
@@ -1426,5 +1530,21 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     TOPIC,
     SCHEMA,
     PUBLISH
+  }
+
+  private static final class PublishResultFailure extends RuntimeException {
+
+    private static final long serialVersionUID = 1L;
+
+    private final PublishException failure;
+
+    private PublishResultFailure(PublishException failure) {
+      super(null, failure, false, false);
+      this.failure = failure;
+    }
+
+    private PublishException failure() {
+      return failure;
+    }
   }
 }
