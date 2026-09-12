@@ -3,9 +3,9 @@
 ## Product authority
 
 - `.local/planning/orbital-salesforce-pubsub-final-blueprint-reviewed.md` is the
-  sole authority for requirements, scope, architecture, and sequencing. It is
-  intentionally Git-ignored. Read it; never edit, commit, publish, or quote
-  substantial excerpts from it.
+  tracked sole authority for requirements, scope, architecture, and sequencing.
+  Read it; do not edit it or quote substantial excerpts without explicit user
+  authorization.
 - The YAML plan, GitHub Issues, Project items, and PRs are derived artifacts.
   They may summarize but never alter the blueprint. Stop on any conflict until
   the applicable workflow corrects the derived artifact.

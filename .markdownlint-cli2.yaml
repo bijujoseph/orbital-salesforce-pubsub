@@ -1,6 +1,7 @@
 ignores:
   - "AGENTS.md"
   - ".github/copilot-instructions.md"
+  - ".local/planning/orbital-salesforce-pubsub-final-blueprint-reviewed.md"
   - "docs/planning/github-project-sync-report.md"
 
 config:
