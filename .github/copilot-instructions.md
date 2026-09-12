@@ -1,16 +1,15 @@
 # GitHub Copilot Instructions
 
-## Project Standards
-- Scan `AGENTS.md` for project-wide standards before suggesting code or configs.
-- Follow the conventions there unless explicit inline files override them.
+## Pull Request Reviews
 
-## Pull Request Review Guidelines
+- Consult `AGENTS.md` before reviewing and follow its repository-wide requirements; if these instructions conflict, `AGENTS.md` takes precedence.
+- Inspect the complete pull request diff and every changed file before submitting the review.
+- Report every distinct actionable finding discovered during that pass; do not intentionally defer a known finding to a later review.
+- Consult the linked issue, Project work-item details, and explicit acceptance criteria when determining scope and expected behavior. Flag in-scope correctness, security, workflow, and regression-test gaps, but do not propose unrelated refactors.
+- Do not reopen resolved, outdated, or user-rejected findings without new repository, test, or authoritative-documentation evidence.
+- Make each finding specific and actionable, identify the affected code, and explain its impact.
 
-### Scope of Review
-- **Focus strictly on the specific work item** that the current Pull Request (PR) is addressing.
-- Consult the linked issue, project work item details, and explicit acceptance criteria to guide your review bounds.
-- **Do not make unnecessary or out-of-scope code suggestions.** Future work and alternative refactors will be handled in separate PRs in the pipeline.
+## Dependabot Pull Requests
 
-### Dependabot Pull Requests
-- When evaluating PRs generated automatically by Dependabot, your primary task is to check if the CI/CD and required action workflows pass.
-- If you find a conflict, breaking change, or disagree with the dependency update, **add a clarifying comment explaining your reasoning and close the Dependabot PR**.
+- Check compatibility with the build, runtime, and configuration; assess release and security implications; and inspect relevant tests and required workflow results.
+- Report specific compatibility, security, or workflow findings. Do not suggest actions outside code review, such as closing the pull request.
