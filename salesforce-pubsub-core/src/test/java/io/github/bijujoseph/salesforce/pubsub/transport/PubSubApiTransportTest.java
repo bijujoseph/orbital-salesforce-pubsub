@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeout;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.protobuf.StringValue;
@@ -626,6 +627,99 @@ class PubSubApiTransportTest {
       assertTrue(channel.awaitTermination(5, TimeUnit.SECONDS));
     } finally {
       releaseInvocation.countDown();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @RepeatedTest(10)
+  void blockedUnaryNewCallCannotDelayCloseOrStartAfterCloseWins() throws Exception {
+    assertBlockedNewCallCannotDelayClose(false);
+  }
+
+  @RepeatedTest(10)
+  void blockedSubscriptionNewCallCannotDelayCloseOrStartAfterCloseWins() throws Exception {
+    assertBlockedNewCallCannotDelayClose(true);
+  }
+
+  @RepeatedTest(10)
+  void blockedClientCallStartCannotDelayClose() throws Exception {
+    BlockingLifecycleManagedChannel blockingChannel =
+        new BlockingLifecycleManagedChannel(false, true);
+    PubSubApiTransport racingTransport = new PubSubApiTransport(blockingChannel, session(0));
+    RecordingObserver<FetchResponse> downstream = new RecordingObserver<>();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<PubSubApiTransport.SubscriptionRpc> invocation =
+          executor.submit(() -> racingTransport.subscribe(downstream));
+      assertTrue(blockingChannel.startEntered.await(5, TimeUnit.SECONDS));
+
+      assertTimeoutPreemptively(Duration.ofSeconds(1), racingTransport::close);
+      assertTrue(blockingChannel.isShutdown());
+      assertTrue(blockingChannel.cancelled.await(1, TimeUnit.SECONDS));
+
+      blockingChannel.release.countDown();
+      PubSubApiTransport.SubscriptionRpc subscription = invocation.get(5, TimeUnit.SECONDS);
+      assertTrue(subscription.isCancelled());
+      assertEquals(1, blockingChannel.starts.get());
+      assertEquals(0, downstream.next.get());
+      assertEquals(0, downstream.errors.get());
+      assertEquals(0, downstream.completed.get());
+    } finally {
+      blockingChannel.release.countDown();
+      racingTransport.close();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @RepeatedTest(10)
+  void synchronousStartCallbackCanCloseReentrantlyBeforeBlockedStartReturns() throws Exception {
+    BlockingLifecycleManagedChannel blockingChannel =
+        new BlockingLifecycleManagedChannel(false, true, true);
+    AtomicReference<PubSubApiTransport> racingTransport = new AtomicReference<>();
+    CountDownLatch closeReturned = new CountDownLatch(1);
+    AtomicInteger next = new AtomicInteger();
+    AtomicInteger errors = new AtomicInteger();
+    AtomicInteger completed = new AtomicInteger();
+    StreamObserver<FetchResponse> downstream =
+        new StreamObserver<>() {
+          @Override
+          public void onNext(FetchResponse response) {
+            next.incrementAndGet();
+            racingTransport.get().close();
+            closeReturned.countDown();
+          }
+
+          @Override
+          public void onError(Throwable failure) {
+            errors.incrementAndGet();
+          }
+
+          @Override
+          public void onCompleted() {
+            completed.incrementAndGet();
+          }
+        };
+    racingTransport.set(new PubSubApiTransport(blockingChannel, session(0)));
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<PubSubApiTransport.SubscriptionRpc> invocation =
+          executor.submit(() -> racingTransport.get().subscribe(downstream));
+
+      assertTrue(closeReturned.await(1, TimeUnit.SECONDS));
+      assertTrue(blockingChannel.isShutdown());
+      assertTrue(blockingChannel.cancelled.await(1, TimeUnit.SECONDS));
+      assertEquals(1, next.get());
+      assertFalse(invocation.isDone());
+
+      blockingChannel.release.countDown();
+      assertTrue(invocation.get(5, TimeUnit.SECONDS).isCancelled());
+      assertEquals(0, errors.get());
+      assertEquals(0, completed.get());
+    } finally {
+      blockingChannel.release.countDown();
+      racingTransport.get().close();
       executor.shutdownNow();
       assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
     }
@@ -1258,6 +1352,42 @@ class PubSubApiTransportTest {
         Arrays.stream(PubSubApiTransport.class.getDeclaredMethods())
             .map(java.lang.reflect.Method::getName)
             .noneMatch(name -> name.equals("managedSubscribe") || name.equals("publishStream")));
+  }
+
+  private void assertBlockedNewCallCannotDelayClose(boolean subscription) throws Exception {
+    BlockingLifecycleManagedChannel blockingChannel =
+        new BlockingLifecycleManagedChannel(true, false);
+    PubSubApiTransport racingTransport = new PubSubApiTransport(blockingChannel, session(0));
+    RecordingObserver<FetchResponse> downstream = new RecordingObserver<>();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<?> invocation =
+          subscription
+              ? executor.submit(() -> racingTransport.subscribe(downstream))
+              : executor.submit(() -> racingTransport.getTopic("blocked-new-call"));
+      assertTrue(blockingChannel.newCallEntered.await(5, TimeUnit.SECONDS));
+
+      assertTimeoutPreemptively(Duration.ofSeconds(1), racingTransport::close);
+      assertTrue(blockingChannel.isShutdown());
+
+      blockingChannel.release.countDown();
+      Object operation = invocation.get(5, TimeUnit.SECONDS);
+      assertTrue(blockingChannel.cancelled.await(1, TimeUnit.SECONDS));
+      assertEquals(0, blockingChannel.starts.get());
+      if (operation instanceof PubSubApiTransport.SubscriptionRpc stream) {
+        assertTrue(stream.isCancelled());
+      } else {
+        awaitCancellation((CompletableFuture<?>) operation);
+      }
+      assertEquals(0, downstream.next.get());
+      assertEquals(0, downstream.errors.get());
+      assertEquals(0, downstream.completed.get());
+    } finally {
+      blockingChannel.release.countDown();
+      racingTransport.close();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
   }
 
   private void assertSanitizedExceptionalCompletion(
@@ -2077,6 +2207,103 @@ class PubSubApiTransportTest {
     @Override
     public String authority() {
       return "safe-authority";
+    }
+  }
+
+  private static final class BlockingLifecycleManagedChannel extends ManagedChannel {
+
+    private final boolean blockNewCall;
+    private final boolean blockStart;
+    private final boolean callbackOnStart;
+    private final CountDownLatch newCallEntered = new CountDownLatch(1);
+    private final CountDownLatch startEntered = new CountDownLatch(1);
+    private final CountDownLatch cancelled = new CountDownLatch(1);
+    private final CountDownLatch release = new CountDownLatch(1);
+    private final AtomicInteger starts = new AtomicInteger();
+    private volatile boolean shutdown;
+
+    private BlockingLifecycleManagedChannel(boolean blockNewCall, boolean blockStart) {
+      this(blockNewCall, blockStart, false);
+    }
+
+    private BlockingLifecycleManagedChannel(
+        boolean blockNewCall, boolean blockStart, boolean callbackOnStart) {
+      this.blockNewCall = blockNewCall;
+      this.blockStart = blockStart;
+      this.callbackOnStart = callbackOnStart;
+    }
+
+    @Override
+    public ManagedChannel shutdown() {
+      shutdown = true;
+      return this;
+    }
+
+    @Override
+    public boolean isShutdown() {
+      return shutdown;
+    }
+
+    @Override
+    public boolean isTerminated() {
+      return shutdown;
+    }
+
+    @Override
+    public ManagedChannel shutdownNow() {
+      return shutdown();
+    }
+
+    @Override
+    public boolean awaitTermination(long timeout, TimeUnit unit) {
+      return shutdown;
+    }
+
+    @Override
+    public <RequestT, ResponseT> ClientCall<RequestT, ResponseT> newCall(
+        MethodDescriptor<RequestT, ResponseT> method, CallOptions callOptions) {
+      newCallEntered.countDown();
+      if (blockNewCall) {
+        await(release);
+      }
+      return new ClientCall<>() {
+        @Override
+        public void start(Listener<ResponseT> responseListener, Metadata headers) {
+          starts.incrementAndGet();
+          startEntered.countDown();
+          if (callbackOnStart) {
+            emitFetchResponse(responseListener);
+          }
+          if (blockStart) {
+            await(release);
+          }
+        }
+
+        @Override
+        public void request(int count) {}
+
+        @Override
+        public void cancel(String message, Throwable cause) {
+          cancelled.countDown();
+        }
+
+        @Override
+        public void halfClose() {}
+
+        @Override
+        public void sendMessage(RequestT message) {}
+      };
+    }
+
+    @Override
+    public String authority() {
+      return "safe-authority";
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <ResponseT> void emitFetchResponse(
+        ClientCall.Listener<ResponseT> responseListener) {
+      responseListener.onMessage((ResponseT) FetchResponse.getDefaultInstance());
     }
   }
 }

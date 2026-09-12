@@ -41,23 +41,23 @@ import io.grpc.ServerServiceDefinition;
 import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.grpc.protobuf.ProtoUtils;
 import io.grpc.stub.ClientCalls;
 import io.grpc.stub.ServerCalls;
 import io.grpc.stub.StreamObserver;
-import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
-import java.security.cert.CertificateFactory;
-import java.util.Objects;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Date;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.RepeatedTest;
 
 class PubSubApiTransportTlsTest {
 
@@ -75,29 +75,39 @@ class PubSubApiTransportTlsTest {
           .setResponseMarshaller(ProtoUtils.marshaller(StringValue.getDefaultInstance()))
           .build();
 
-  @Test
+  @RepeatedTest(3)
   void publicConstructorUsesTlsAndScopesCredentialsToSalesforceMethods() throws Exception {
-    Path trustedCertificate = resource("tls/localhost.crt");
-    Path trustedKey = materializePrivateKey("tls/localhost-key.b64");
-    Path trustStore = createTrustStore(trustedCertificate);
     String previousStore = System.getProperty("javax.net.ssl.trustStore");
     String previousPassword = System.getProperty("javax.net.ssl.trustStorePassword");
     String previousType = System.getProperty("javax.net.ssl.trustStoreType");
+    SelfSignedCertificate trustedCertificate = null;
+    SelfSignedCertificate untrustedCertificate = null;
+    Path trustStore = null;
     Server trustedServer = null;
+    Server hostnameMismatchServer = null;
+    Server untrustedServer = null;
     Server plaintextServer = null;
     PubSubApiTransport transport = null;
     ManagedChannel unrelatedChannel = null;
+    PubSubApiTransport hostnameMismatchTransport = null;
     PubSubApiTransport untrustedTransport = null;
     PubSubApiTransport plaintextTransport = null;
     try {
+      Instant now = Instant.now();
+      Date notBefore = Date.from(now.minus(Duration.ofDays(2)));
+      Date notAfter = Date.from(now.plus(Duration.ofDays(7)));
+      trustedCertificate = new SelfSignedCertificate("localhost", notBefore, notAfter);
+      untrustedCertificate = new SelfSignedCertificate("localhost", notBefore, notAfter);
+      trustStore = createTrustStore(trustedCertificate);
       System.setProperty("javax.net.ssl.trustStore", trustStore.toString());
       System.setProperty("javax.net.ssl.trustStorePassword", "changeit");
       System.setProperty("javax.net.ssl.trustStoreType", KeyStore.getDefaultType());
 
       AtomicReference<Metadata> salesforceHeaders = new AtomicReference<>();
+      AtomicInteger trustedInvocations = new AtomicInteger();
       AtomicInteger unrelatedInvocations = new AtomicInteger();
       trustedServer =
-          tlsServer(trustedCertificate, trustedKey, salesforceHeaders, unrelatedInvocations)
+          tlsServer(trustedCertificate, salesforceHeaders, trustedInvocations, unrelatedInvocations)
               .build()
               .start();
       transport =
@@ -112,6 +122,7 @@ class PubSubApiTransportTlsTest {
       assertEquals("tls-token", headers.get(ACCESS_TOKEN));
       assertEquals("https://tls-instance.example", headers.get(INSTANCE_URL));
       assertEquals("tls-tenant", headers.get(TENANT_ID));
+      assertEquals(1, trustedInvocations.get());
 
       unrelatedChannel =
           NettyChannelBuilder.forAddress("localhost", trustedServer.getPort())
@@ -126,12 +137,40 @@ class PubSubApiTransportTlsTest {
       assertThrows(Exception.class, () -> unrelated.get(5, TimeUnit.SECONDS));
       assertEquals(0, unrelatedInvocations.get());
 
+      AtomicInteger hostnameMismatchInvocations = new AtomicInteger();
+      hostnameMismatchServer =
+          tlsServer(
+                  trustedCertificate,
+                  new AtomicReference<>(),
+                  hostnameMismatchInvocations,
+                  new AtomicInteger())
+              .build()
+              .start();
+      hostnameMismatchTransport =
+          new PubSubApiTransport(
+              new EndpointConfig("127.0.0.1", hostnameMismatchServer.getPort()), session());
+      PubSubApiTransport rejectedHostname = hostnameMismatchTransport;
+      assertThrows(
+          Exception.class,
+          () -> rejectedHostname.getTopic("hostname-mismatch").get(5, TimeUnit.SECONDS));
+      assertEquals(0, hostnameMismatchInvocations.get());
+
+      AtomicInteger untrustedInvocations = new AtomicInteger();
+      untrustedServer =
+          tlsServer(
+                  untrustedCertificate,
+                  new AtomicReference<>(),
+                  untrustedInvocations,
+                  new AtomicInteger())
+              .build()
+              .start();
       untrustedTransport =
           new PubSubApiTransport(
-              new EndpointConfig("127.0.0.1", trustedServer.getPort()), session());
+              new EndpointConfig("localhost", untrustedServer.getPort()), session());
       PubSubApiTransport rejectedUntrusted = untrustedTransport;
       assertThrows(
           Exception.class, () -> rejectedUntrusted.getTopic("untrusted").get(5, TimeUnit.SECONDS));
+      assertEquals(0, untrustedInvocations.get());
 
       AtomicInteger plaintextInvocations = new AtomicInteger();
       plaintextServer = plaintextServer(plaintextInvocations).build().start();
@@ -144,38 +183,46 @@ class PubSubApiTransportTlsTest {
       assertEquals(0, plaintextInvocations.get());
     } finally {
       close(transport);
+      close(hostnameMismatchTransport);
       close(untrustedTransport);
       close(plaintextTransport);
       shutdown(unrelatedChannel);
       shutdown(trustedServer);
+      shutdown(hostnameMismatchServer);
+      shutdown(untrustedServer);
       shutdown(plaintextServer);
       restoreProperty("javax.net.ssl.trustStore", previousStore);
       restoreProperty("javax.net.ssl.trustStorePassword", previousPassword);
       restoreProperty("javax.net.ssl.trustStoreType", previousType);
-      Files.deleteIfExists(trustStore);
-      Files.deleteIfExists(trustedKey);
+      if (trustStore != null) {
+        Files.deleteIfExists(trustStore);
+      }
+      if (trustedCertificate != null) {
+        trustedCertificate.delete();
+      }
+      if (untrustedCertificate != null) {
+        untrustedCertificate.delete();
+      }
     }
   }
 
   private static NettyServerBuilder tlsServer(
-      Path certificate,
-      Path privateKey,
+      SelfSignedCertificate certificate,
       AtomicReference<Metadata> salesforceHeaders,
+      AtomicInteger salesforceInvocations,
       AtomicInteger unrelatedInvocations)
       throws Exception {
     return NettyServerBuilder.forPort(0)
-        .sslContext(GrpcSslContexts.forServer(certificate.toFile(), privateKey.toFile()).build())
+        .sslContext(
+            GrpcSslContexts.forServer(certificate.certificate(), certificate.privateKey()).build())
         .addService(
-            ServerInterceptors.intercept(topicService(), metadataInterceptor(salesforceHeaders)))
+            ServerInterceptors.intercept(
+                topicService(salesforceInvocations), metadataInterceptor(salesforceHeaders)))
         .addService(plainService(unrelatedInvocations));
   }
 
   private static NettyServerBuilder plaintextServer(AtomicInteger invocations) {
     return NettyServerBuilder.forPort(0).addService(topicService(invocations));
-  }
-
-  private static PubSubGrpc.PubSubImplBase topicService() {
-    return topicService(new AtomicInteger());
   }
 
   private static PubSubGrpc.PubSubImplBase topicService(AtomicInteger invocations) {
@@ -219,35 +266,21 @@ class PubSubApiTransportTlsTest {
         .build();
   }
 
-  private static Path createTrustStore(Path certificate) throws Exception {
+  private static Path createTrustStore(SelfSignedCertificate certificate) throws Exception {
     char[] password = "changeit".toCharArray();
     KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
     keyStore.load(null, password);
-    try (InputStream input = Files.newInputStream(certificate)) {
-      keyStore.setCertificateEntry(
-          "local-test", CertificateFactory.getInstance("X.509").generateCertificate(input));
-    }
+    keyStore.setCertificateEntry("local-test", certificate.cert());
     Path path = Files.createTempFile("osp-022-trust-", ".p12");
-    try (OutputStream output = Files.newOutputStream(path)) {
-      keyStore.store(output, password);
+    try {
+      try (OutputStream output = Files.newOutputStream(path)) {
+        keyStore.store(output, password);
+      }
+      return path;
+    } catch (Exception exception) {
+      Files.deleteIfExists(path);
+      throw exception;
     }
-    return path;
-  }
-
-  private static Path resource(String name) throws Exception {
-    return Path.of(
-        Objects.requireNonNull(PubSubApiTransportTlsTest.class.getClassLoader().getResource(name))
-            .toURI());
-  }
-
-  private static Path materializePrivateKey(String resource) throws Exception {
-    String body = Files.readString(resource(resource), StandardCharsets.US_ASCII).trim();
-    Path privateKey = Files.createTempFile("osp-022-key-", ".pem");
-    Files.writeString(
-        privateKey,
-        "-----BEGIN PRIVATE KEY-----\n" + body + "\n-----END PRIVATE KEY-----\n",
-        StandardCharsets.US_ASCII);
-    return privateKey;
   }
 
   private static SalesforceSession session() {

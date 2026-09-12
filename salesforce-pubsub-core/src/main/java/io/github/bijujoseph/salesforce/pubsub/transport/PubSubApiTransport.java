@@ -28,7 +28,12 @@ import com.salesforce.eventbus.protobuf.TopicRequest;
 import io.github.bijujoseph.salesforce.pubsub.auth.SalesforceSession;
 import io.github.bijujoseph.salesforce.pubsub.config.EndpointConfig;
 import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
+import io.grpc.CallOptions;
+import io.grpc.Channel;
+import io.grpc.ClientCall;
 import io.grpc.ManagedChannel;
+import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.ClientCallStreamObserver;
@@ -61,7 +66,6 @@ import java.util.function.Supplier;
 public final class PubSubApiTransport implements SalesforceEventTransport {
 
   private final ManagedChannel channel;
-  private final PubSubGrpc.PubSubStub asyncStub;
   private final AtomicReference<SessionMetadata> session;
   private final AtomicBoolean closed = new AtomicBoolean();
   private final Object lifecycleLock = new Object();
@@ -110,7 +114,6 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       Runnable beforeRpcStart,
       Runnable afterRpcStart) {
     this.channel = Objects.requireNonNull(channel, "channel");
-    this.asyncStub = PubSubGrpc.newStub(channel);
     this.session = new AtomicReference<>(initialSession);
     this.beforeRpcStart = Objects.requireNonNull(beforeRpcStart, "before RPC start");
     this.afterRpcStart = Objects.requireNonNull(afterRpcStart, "after RPC start");
@@ -195,7 +198,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       SessionMetadata snapshot = claimRpcStart(result::tryStart);
       if (snapshot != null) {
         afterRpcStart.run();
-        PubSubGrpc.PubSubStub stub = credentialedStub(snapshot);
+        PubSubGrpc.PubSubStub stub = credentialedStub(snapshot, result);
         StreamObserver<FetchRequest> requestObserver = stub.subscribe(result.responseObserver());
         result.attachFallback(requestObserver);
       }
@@ -217,7 +220,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       SessionMetadata snapshot = claimRpcStart(result::tryStart);
       if (snapshot != null) {
         afterRpcStart.run();
-        PubSubGrpc.PubSubStub stub = credentialedStub(snapshot);
+        PubSubGrpc.PubSubStub stub = credentialedStub(snapshot, result);
         invocation.accept(stub, new UnaryResponseObserver<>(result, responseMapper));
       }
     } catch (RuntimeException exception) {
@@ -244,8 +247,10 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
   }
 
-  private PubSubGrpc.PubSubStub credentialedStub(SessionMetadata snapshot) {
-    return asyncStub.withCallCredentials(new SalesforceCallCredentials(snapshot));
+  private PubSubGrpc.PubSubStub credentialedStub(
+      SessionMetadata snapshot, ActiveOperation operation) {
+    return PubSubGrpc.newStub(new OperationChannel(channel, operation))
+        .withCallCredentials(new SalesforceCallCredentials(snapshot));
   }
 
   private void unregister(ActiveOperation operation) {
@@ -292,6 +297,8 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
   }
 
   private interface ActiveOperation {
+
+    void attachClientCall(ClientCall<?, ?> call);
 
     void closeFromTransport();
   }
@@ -352,6 +359,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     private final AtomicReference<ClientCallStreamObserver<?>> requestStream =
         new AtomicReference<>();
+    private final AtomicReference<ClientCall<?, ?>> clientCall = new AtomicReference<>();
     private final AtomicReference<RpcState> state = new AtomicReference<>(RpcState.RESERVED);
     private final Consumer<ActiveOperation> onTerminal;
     private final AtomicBoolean terminalNotified = new AtomicBoolean();
@@ -389,13 +397,22 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         return false;
       }
       notifyTerminal();
+      cancelClientCall(clientCall.get());
       cancelRequest(requestStream.get());
       return super.cancel(mayInterruptIfRunning);
     }
 
     @Override
+    public void attachClientCall(ClientCall<?, ?> call) {
+      if (!clientCall.compareAndSet(null, call) || state.get() == RpcState.CANCELLED) {
+        cancelClientCall(call);
+      }
+    }
+
+    @Override
     public void closeFromTransport() {
       if (cancelState()) {
+        cancelClientCall(clientCall.get());
         CompletableFuture.runAsync(this::cancelCompletionFromTransport);
       }
     }
@@ -424,6 +441,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     private void failAndCancel(Throwable failure, String reason) {
       if (failInternal(failure)) {
+        cancelClientCall(clientCall.get());
         ClientCallStreamObserver<?> stream = requestStream.get();
         if (stream != null) {
           stream.cancel(reason, null);
@@ -435,6 +453,16 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       if (stream != null) {
         try {
           stream.cancel("RPC cancelled", null);
+        } catch (RuntimeException ignored) {
+          // Cancellation is already reflected by the future's terminal state.
+        }
+      }
+    }
+
+    private static void cancelClientCall(ClientCall<?, ?> call) {
+      if (call != null) {
+        try {
+          call.cancel("RPC cancelled", null);
         } catch (RuntimeException ignored) {
           // Cancellation is already reflected by the future's terminal state.
         }
@@ -563,6 +591,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private final AtomicBoolean terminalNotified = new AtomicBoolean();
     private final AtomicBoolean callbackActive = new AtomicBoolean();
     private final AtomicReference<StreamObserver<FetchRequest>> requests = new AtomicReference<>();
+    private final AtomicReference<ClientCall<?, ?>> clientCall = new AtomicReference<>();
     private final AtomicReference<OutboundPermit> outboundPermit = new AtomicReference<>();
     private final AtomicReference<SubscriptionState> state =
         new AtomicReference<>(SubscriptionState.RESERVED);
@@ -621,6 +650,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         return;
       }
       notifyTerminal();
+      cancelClientCall(clientCall.get(), "RPC cancelled");
       StreamObserver<FetchRequest> requestObserver = requests.get();
       if (requestObserver instanceof ClientCallStreamObserver<?> clientStream) {
         cancelClientStream(clientStream, "RPC cancelled");
@@ -629,8 +659,16 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     @Override
+    public void attachClientCall(ClientCall<?, ?> call) {
+      if (!clientCall.compareAndSet(null, call) || state.get() == SubscriptionState.CANCELLED) {
+        cancelClientCall(call, "RPC cancelled");
+      }
+    }
+
+    @Override
     public void closeFromTransport() {
       if (cancelState()) {
+        cancelClientCall(clientCall.get(), "RPC cancelled");
         CompletableFuture.runAsync(() -> completion.cancel(false));
       }
     }
@@ -817,9 +855,134 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         // The local terminal state already prevents further transport activity.
       }
     }
+
+    private static void cancelClientCall(ClientCall<?, ?> call, String reason) {
+      if (call != null) {
+        try {
+          call.cancel(reason, null);
+        } catch (RuntimeException ignored) {
+          // The local terminal state already prevents further transport activity.
+        }
+      }
+    }
   }
 
   private record OutboundPermit() {}
+
+  private static final class OperationChannel extends Channel {
+
+    private final Channel delegate;
+    private final ActiveOperation operation;
+
+    private OperationChannel(Channel delegate, ActiveOperation operation) {
+      this.delegate = delegate;
+      this.operation = operation;
+    }
+
+    @Override
+    public <RequestT, ResponseT> ClientCall<RequestT, ResponseT> newCall(
+        MethodDescriptor<RequestT, ResponseT> method, CallOptions callOptions) {
+      // newCall may block, so create outside lifecycle synchronization and cancel on late attach.
+      ClientCall<RequestT, ResponseT> call =
+          new OperationClientCall<>(delegate.newCall(method, callOptions));
+      operation.attachClientCall(call);
+      return call;
+    }
+
+    @Override
+    public String authority() {
+      return delegate.authority();
+    }
+  }
+
+  private static final class OperationClientCall<RequestT, ResponseT>
+      extends ClientCall<RequestT, ResponseT> {
+
+    private final ClientCall<RequestT, ResponseT> delegate;
+    private final AtomicReference<ClientCallState> state =
+        new AtomicReference<>(ClientCallState.NEW);
+
+    private OperationClientCall(ClientCall<RequestT, ResponseT> delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public void start(Listener<ResponseT> responseListener, Metadata headers) {
+      // The CAS linearizes client start without holding a lock across gRPC or listener code.
+      if (!state.compareAndSet(ClientCallState.NEW, ClientCallState.STARTING)) {
+        responseListener.onClose(Status.CANCELLED, new Metadata());
+        return;
+      }
+      try {
+        delegate.start(responseListener, headers);
+      } finally {
+        if (!state.compareAndSet(ClientCallState.STARTING, ClientCallState.STARTED)) {
+          cancelDelegate("RPC cancelled", null);
+        }
+      }
+    }
+
+    @Override
+    public void request(int count) {
+      if (state.get() == ClientCallState.STARTED) {
+        delegate.request(count);
+      }
+    }
+
+    @Override
+    public void cancel(String message, Throwable cause) {
+      ClientCallState previous = state.getAndSet(ClientCallState.CANCELLED);
+      if (previous != ClientCallState.CANCELLED) {
+        cancelDelegate(message, cause);
+      }
+    }
+
+    @Override
+    public void halfClose() {
+      if (state.get() == ClientCallState.STARTED) {
+        delegate.halfClose();
+      }
+    }
+
+    @Override
+    public void sendMessage(RequestT message) {
+      if (state.get() == ClientCallState.STARTED) {
+        delegate.sendMessage(message);
+      }
+    }
+
+    @Override
+    public boolean isReady() {
+      return state.get() == ClientCallState.STARTED && delegate.isReady();
+    }
+
+    @Override
+    public void setMessageCompression(boolean enabled) {
+      if (state.get() == ClientCallState.STARTED) {
+        delegate.setMessageCompression(enabled);
+      }
+    }
+
+    @Override
+    public io.grpc.Attributes getAttributes() {
+      return delegate.getAttributes();
+    }
+
+    private void cancelDelegate(String message, Throwable cause) {
+      try {
+        delegate.cancel(message, cause);
+      } catch (RuntimeException ignored) {
+        // The operation's terminal state remains authoritative.
+      }
+    }
+  }
+
+  private enum ClientCallState {
+    NEW,
+    STARTING,
+    STARTED,
+    CANCELLED
+  }
 
   private enum SubscriptionState {
     RESERVED,
