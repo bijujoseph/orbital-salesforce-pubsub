@@ -31,10 +31,10 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           REVIEW_COMMIT_ID: ${{ github.event.review.commit_id }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ORBITAL_SF_REPO_PAT }}
       - name: Enable auto-merge (squash)
         if: steps.verify_approval.outputs.should_merge == 'true'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ORBITAL_SF_REPO_PAT }}
