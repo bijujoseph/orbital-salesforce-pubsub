@@ -518,6 +518,18 @@ class PubSubApiTransportTest {
     assertSubscriptionFailure(
         Status.Code.UNAVAILABLE, SubscriptionException.class, "WARN", ConnectorStatus.DEGRADED);
     assertSubscriptionFailure(
+        Status.Code.DEADLINE_EXCEEDED,
+        SubscriptionException.class,
+        "WARN",
+        ConnectorStatus.DEGRADED);
+    assertSubscriptionFailure(
+        Status.Code.RESOURCE_EXHAUSTED,
+        SubscriptionException.class,
+        "WARN",
+        ConnectorStatus.DEGRADED);
+    assertSubscriptionFailure(
+        Status.Code.ABORTED, SubscriptionException.class, "WARN", ConnectorStatus.DEGRADED);
+    assertSubscriptionFailure(
         Status.Code.INTERNAL, SubscriptionException.class, "ERROR", ConnectorStatus.FAILED);
     assertSubscriptionFailure(
         Status.Code.UNAUTHENTICATED,

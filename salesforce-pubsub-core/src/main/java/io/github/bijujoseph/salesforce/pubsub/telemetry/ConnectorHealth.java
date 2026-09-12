@@ -16,7 +16,7 @@
 
 package io.github.bijujoseph.salesforce.pubsub.telemetry;
 
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
@@ -31,7 +31,7 @@ public final class ConnectorHealth {
   private final String connectionName;
   private final SalesforcePubSubTelemetry telemetry;
   private final Logger logger;
-  private final Map<Object, String> activeSubscriptions = new HashMap<>();
+  private final Map<Object, String> activeSubscriptions = new IdentityHashMap<>();
   private final AtomicReference<ConnectorStatus> status =
       new AtomicReference<>(ConnectorStatus.STARTING);
 

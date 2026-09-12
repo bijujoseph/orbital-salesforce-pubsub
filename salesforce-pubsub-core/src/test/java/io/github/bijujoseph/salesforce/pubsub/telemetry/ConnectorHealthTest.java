@@ -185,6 +185,46 @@ class ConnectorHealthTest {
   }
 
   @Test
+  void equalSubscriptionHandlesRemainIndependentByIdentity() {
+    List<String> topicStates = new ArrayList<>();
+    SalesforcePubSubTelemetry telemetry =
+        new SalesforcePubSubTelemetry() {
+          @Override
+          public void subscriptionState(
+              String connectionName, String topic, ConnectorStatus status) {
+            topicStates.add(topic + ":" + status);
+          }
+        };
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    EqualSubscription first = new EqualSubscription("same");
+    EqualSubscription second = new EqualSubscription("same");
+
+    assertEquals(first, second);
+    assertTrue(health.subscriptionSucceeded(first, "/event/Same__e"));
+    assertTrue(health.subscriptionSucceeded(second, "/event/Same__e"));
+    int registrations = topicStates.size();
+    assertFalse(health.subscriptionSucceeded(first, "/event/Changed__e"));
+    assertEquals(registrations, topicStates.size());
+
+    assertTrue(health.subscriptionEnded(first, ConnectorStatus.CONNECTED));
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+    assertEquals("/event/Same__e:SUBSCRIBED", topicStates.getLast());
+    assertTrue(health.subscriptionEnded(second, ConnectorStatus.CONNECTED));
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+
+    EqualSubscription third = new EqualSubscription("different-topics");
+    EqualSubscription fourth = new EqualSubscription("different-topics");
+    assertTrue(health.subscriptionSucceeded(third, "/event/A__e"));
+    assertTrue(health.subscriptionSucceeded(fourth, "/event/B__e"));
+    assertTrue(health.subscriptionEnded(third, ConnectorStatus.CONNECTED));
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+    assertEquals("/event/A__e:CONNECTED", topicStates.getLast());
+    assertTrue(health.subscriptionEnded(fourth, ConnectorStatus.CONNECTED));
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+    assertEquals("/event/B__e:CONNECTED", topicStates.getLast());
+  }
+
+  @Test
   void unarySuccessRecoversAccordingToTheActiveSubscriptionRegistry() {
     RecordingTelemetry telemetry = new RecordingTelemetry();
     ConnectorHealth health = new ConnectorHealth("connection", telemetry);
@@ -369,6 +409,8 @@ class ConnectorHealthTest {
   private record LogEvent(String level, String message, Map<String, Object> keyValues) {}
 
   private record StatusObservation(ConnectorStatus published, ConnectorStatus current) {}
+
+  private record EqualSubscription(String value) {}
 
   private static final class RecordingLogger {
     private final List<LogEvent> events = new ArrayList<>();

@@ -26,9 +26,29 @@ final class SafeExceptionContext {
     if (value == null || value.isBlank()) {
       return "<absent>";
     }
-    String sanitized = value.replace('\r', '_').replace('\n', '_');
-    return sanitized.length() <= MAX_VALUE_LENGTH
-        ? sanitized
-        : sanitized.substring(0, MAX_VALUE_LENGTH) + "…";
+    StringBuilder sanitized = new StringBuilder(Math.min(value.length(), MAX_VALUE_LENGTH + 1));
+    int offset = 0;
+    while (offset < value.length()) {
+      int codePoint = value.codePointAt(offset);
+      int normalized = unsafeDiagnosticCharacter(codePoint) ? '_' : codePoint;
+      if (sanitized.length() + Character.charCount(normalized) > MAX_VALUE_LENGTH) {
+        break;
+      }
+      sanitized.appendCodePoint(normalized);
+      offset += Character.charCount(codePoint);
+    }
+    if (offset < value.length()) {
+      sanitized.append('…');
+    }
+    return sanitized.toString();
+  }
+
+  private static boolean unsafeDiagnosticCharacter(int codePoint) {
+    int type = Character.getType(codePoint);
+    return type == Character.CONTROL
+        || type == Character.FORMAT
+        || type == Character.LINE_SEPARATOR
+        || type == Character.PARAGRAPH_SEPARATOR
+        || type == Character.SURROGATE;
   }
 }

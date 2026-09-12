@@ -16,7 +16,7 @@
 
 package io.github.bijujoseph.salesforce.pubsub.error;
 
-/** Indicates a terminal subscription failure. */
+/** Indicates a Salesforce Pub/Sub subscription failure. */
 public final class SubscriptionException extends SalesforcePubSubException {
 
   private static final long serialVersionUID = 1L;

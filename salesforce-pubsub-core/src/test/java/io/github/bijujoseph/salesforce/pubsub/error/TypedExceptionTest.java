@@ -80,6 +80,29 @@ class TypedExceptionTest {
   }
 
   @Test
+  void exceptionContextNormalizesUnsafeUnicodeBeforeCodePointSafeTruncation() {
+    String supplementaryFormat = new String(Character.toChars(0xE0001));
+    String unsafe = "safe\t\0\u001b\u2028\u2029\u202e" + supplementaryFormat + "context";
+
+    String sanitized = SafeExceptionContext.value(unsafe);
+
+    assertEquals("safe_______context", sanitized);
+    assertFalse(sanitized.codePoints().anyMatch(TypedExceptionTest::unsafeDiagnosticCharacter));
+    assertEquals("safe context", SafeExceptionContext.value("safe context"));
+    assertEquals("<absent>", SafeExceptionContext.value(null));
+
+    String boundary = SafeExceptionContext.value("x".repeat(255) + "😀tail");
+    assertEquals("x".repeat(255) + "…", boundary);
+    assertFalse(Character.isSurrogate(boundary.charAt(boundary.length() - 1)));
+
+    String normalizedBoundary =
+        SafeExceptionContext.value("x".repeat(255) + supplementaryFormat + "tail");
+    assertEquals("x".repeat(255) + "_…", normalizedBoundary);
+    assertFalse(
+        normalizedBoundary.codePoints().anyMatch(TypedExceptionTest::unsafeDiagnosticCharacter));
+  }
+
+  @Test
   void transportFailureCarriesOnlyStatusCode() {
     TransportException failure = new TransportException(Status.Code.INTERNAL);
 
@@ -91,5 +114,14 @@ class TypedExceptionTest {
     assertFalse(missing.getMessage().contains("payload"));
     assertThrows(
         NoSuchMethodException.class, () -> TransportException.class.getConstructor(String.class));
+  }
+
+  private static boolean unsafeDiagnosticCharacter(int codePoint) {
+    int type = Character.getType(codePoint);
+    return type == Character.CONTROL
+        || type == Character.FORMAT
+        || type == Character.LINE_SEPARATOR
+        || type == Character.PARAGRAPH_SEPARATOR
+        || type == Character.SURROGATE;
   }
 }
