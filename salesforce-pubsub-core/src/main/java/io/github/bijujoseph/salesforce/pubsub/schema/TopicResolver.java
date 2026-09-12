@@ -58,7 +58,7 @@ public final class TopicResolver {
     if (lookup == null) {
       return CompletableFuture.failedFuture(new TopicNotFoundException(topicName));
     }
-    return lookup.thenApply(metadata -> validate(topicName, operation, metadata));
+    return new TopicResolutionStage(lookup.toCompletableFuture(), topicName, operation);
   }
 
   private static ResolvedTopic validate(
@@ -75,5 +75,40 @@ public final class TopicResolver {
     }
     return new ResolvedTopic(
         topicName, metadata.canPublish(), metadata.canSubscribe(), metadata.schemaId());
+  }
+
+  private static final class TopicResolutionStage extends CompletableFuture<ResolvedTopic> {
+
+    private final CompletableFuture<TopicMetadata> source;
+
+    private TopicResolutionStage(
+        CompletableFuture<TopicMetadata> source, String topicName, String operation) {
+      this.source = Objects.requireNonNull(source, "topic lookup stage");
+      source.whenComplete(
+          (metadata, failure) -> {
+            if (failure != null) {
+              if (source.isCancelled()) {
+                super.cancel(false);
+              } else {
+                super.completeExceptionally(failure);
+              }
+              return;
+            }
+            try {
+              super.complete(validate(topicName, operation, metadata));
+            } catch (RuntimeException validationFailure) {
+              super.completeExceptionally(validationFailure);
+            }
+          });
+    }
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+      if (!super.cancel(mayInterruptIfRunning)) {
+        return false;
+      }
+      source.cancel(mayInterruptIfRunning);
+      return true;
+    }
   }
 }

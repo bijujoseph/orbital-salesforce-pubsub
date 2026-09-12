@@ -47,6 +47,8 @@ import io.github.bijujoseph.salesforce.pubsub.error.TopicNotFoundException;
 import io.github.bijujoseph.salesforce.pubsub.publish.PublishReceipt;
 import io.github.bijujoseph.salesforce.pubsub.publish.PublishRequest;
 import io.github.bijujoseph.salesforce.pubsub.publish.SalesforcePublisher;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorStatus;
 import io.github.bijujoseph.salesforce.pubsub.telemetry.MetricLabels;
 import io.github.bijujoseph.salesforce.pubsub.telemetry.SalesforcePubSubMetric;
 import io.github.bijujoseph.salesforce.pubsub.telemetry.SalesforcePubSubTelemetry;
@@ -63,6 +65,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -98,6 +101,17 @@ class SalesforcePublisherTest {
         {"name":"Optional__c","type":["null","string"],"default":null}
       ]}
       """;
+  private static final String SNAPSHOT_SCHEMA_JSON =
+      """
+      {"type":"record","name":"SnapshotEvent","fields":[
+        {"name":"Nested__c","type":{"type":"record","name":"NestedValue","fields":[
+          {"name":"Value__c","type":"string"}
+        ]}},
+        {"name":"Tags__c","type":{"type":"array","items":"string"}},
+        {"name":"BinaryArray__c","type":"bytes"},
+        {"name":"BinaryBuffer__c","type":"bytes"}
+      ]}
+      """;
   private static final byte[] REPLAY_ID = {3, 1, 4, 1, 5};
   private static final String PAYLOAD_SENTINEL = "payload-secret-sentinel";
   private static final String TOKEN_SENTINEL = "access-token-secret-sentinel";
@@ -109,6 +123,7 @@ class SalesforcePublisherTest {
   private ManagedChannel channel;
   private PubSubApiTransport transport;
   private SalesforcePublisher publisher;
+  private ConnectorHealth health;
 
   @BeforeEach
   void startServer() throws Exception {
@@ -121,6 +136,7 @@ class SalesforcePublisherTest {
             .build()
             .start();
     channel = InProcessChannelBuilder.forName(serverName).directExecutor().build();
+    health = new ConnectorHealth("publisher-test");
     transport =
         new PubSubApiTransport(
             channel,
@@ -131,7 +147,7 @@ class SalesforcePublisherTest {
                 "user-secret-sentinel"),
             () -> {},
             () -> {},
-            null,
+            health,
             logger.proxy());
     publisher = new SalesforcePublisher(transport);
   }
@@ -313,6 +329,37 @@ class SalesforcePublisherTest {
   }
 
   @Test
+  void eventLevelPublishErrorLeavesHealthConnectedAndLaterPublishSucceeds() throws Exception {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+    service.responseMode = ResponseMode.RESULT_ERROR;
+
+    Throwable failure = failureOf(observedPublisher.publish(request(VALID_TOPIC)));
+
+    assertInstanceOf(PublishException.class, failure);
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+    assertEquals(1, service.publishCalls);
+    assertEquals(0, telemetry.successes.get());
+    assertEquals(List.of(failure), telemetry.failures);
+    assertFalse(failure.toString().contains(REMOTE_SENTINEL));
+    assertFalse(failure.toString().contains(PAYLOAD_SENTINEL));
+
+    service.responseMode = ResponseMode.SUCCESS;
+    PublishReceipt receipt =
+        observedPublisher
+            .publish(new PublishRequest(VALID_TOPIC, validPayload(), "recovery-correlation"))
+            .toCompletableFuture()
+            .get(5, TimeUnit.SECONDS);
+
+    assertEquals("recovery-correlation", receipt.correlationKey());
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+    assertEquals(2, service.publishCalls);
+    assertEquals(2, service.publishRequests.size());
+    assertEquals(1, telemetry.successes.get());
+    assertEquals(1, telemetry.failures.size());
+  }
+
+  @Test
   void emptyReplayResultFailsWithoutReceiptOrSuccessTelemetry() {
     FailureTelemetry telemetry = new FailureTelemetry();
     SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
@@ -382,6 +429,97 @@ class SalesforcePublisherTest {
     assertInstanceOf(CancellationException.class, telemetry.failures.get(0));
     assertEquals("CancellationException", telemetry.failureLabels.get(0).exceptionType());
     assertEquals(0, service.publishCalls);
+  }
+
+  @Test
+  void cancellationDuringHeldTopicLookupCancelsRpcAndSuppressesLateWork() throws Exception {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+    service.responseMode = ResponseMode.HOLD_TOPIC;
+    CompletableFuture<PublishReceipt> publication =
+        observedPublisher.publish(request("/event/HeldTopic__e")).toCompletableFuture();
+    assertTrue(service.awaitHeldTopicReceived());
+    assertFalse(publication.isDone());
+    assertEquals(List.of("GetTopic"), service.callOrder);
+    assertEquals(0, service.schemaCalls);
+    assertEquals(0, service.publishCalls);
+
+    assertTrue(publication.cancel(true));
+
+    assertTrue(service.awaitHeldTopicCancellation());
+    assertTrue(publication.isCancelled());
+    assertThrows(CancellationException.class, publication::join);
+    assertEquals(0, telemetry.successes.get());
+    assertEquals(1, telemetry.failures.size());
+    assertInstanceOf(CancellationException.class, telemetry.failures.get(0));
+    service.releaseHeldTopic();
+    assertTrue(publication.isCancelled());
+    assertEquals(List.of("GetTopic"), service.callOrder);
+    assertEquals(0, service.schemaCalls);
+    assertEquals(0, service.publishCalls);
+  }
+
+  @Test
+  void publishRequestDeepSnapshotSurvivesMutationBeforeDelayedEncoding() throws Exception {
+    Map<String, Object> nested = new LinkedHashMap<>();
+    nested.put("Value__c", "nested-original");
+    List<String> tags = new ArrayList<>(List.of("alpha", "beta"));
+    byte[] binaryArray = {1, 2, 3};
+    byte[] bufferStorage = {8, 9, 10, 11};
+    ByteBuffer binaryBuffer = ByteBuffer.wrap(bufferStorage);
+    binaryBuffer.position(1).limit(3);
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("Nested__c", nested);
+    payload.put("Tags__c", tags);
+    payload.put("BinaryArray__c", binaryArray);
+    payload.put("BinaryBuffer__c", binaryBuffer);
+    PublishRequest request =
+        new PublishRequest("/event/Snapshot__e", payload, "snapshot-correlation");
+    service.responseMode = ResponseMode.HOLD_TOPIC;
+    CompletableFuture<PublishReceipt> publication =
+        publisher.publish(request).toCompletableFuture();
+    assertTrue(service.awaitHeldTopicReceived());
+    assertEquals(List.of("GetTopic"), service.callOrder);
+
+    nested.put("Value__c", "nested-mutated");
+    tags.clear();
+    tags.add("tags-mutated");
+    binaryArray[0] = 99;
+    bufferStorage[1] = 99;
+    binaryBuffer.clear();
+    payload.clear();
+
+    Map<String, Object> returned = request.payload();
+    assertThrows(UnsupportedOperationException.class, () -> returned.put("forged", "value"));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> mapValue(returned.get("Nested__c")).put("Value__c", "forged"));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> listValue(returned.get("Tags__c")).add("forged"));
+    ((byte[]) returned.get("BinaryArray__c"))[1] = 98;
+    ((byte[]) returned.get("BinaryBuffer__c"))[0] = 98;
+    assertArrayEquals(new byte[] {1, 2, 3}, (byte[]) request.payload().get("BinaryArray__c"));
+    assertArrayEquals(new byte[] {9, 10}, (byte[]) request.payload().get("BinaryBuffer__c"));
+
+    service.releaseHeldTopic();
+    PublishReceipt receipt = publication.get(5, TimeUnit.SECONDS);
+
+    assertEquals("snapshot-correlation", receipt.correlationKey());
+    assertEquals(List.of("GetTopic", "GetSchema", "Publish"), service.callOrder);
+    assertEquals(1, service.publishCalls);
+    assertEquals(1, service.publishRequests.size());
+    ProducerEvent event = service.publishRequests.getFirst().getEvents(0);
+    GenericRecord decoded = decode(event.getPayload().toByteArray(), SNAPSHOT_SCHEMA_JSON);
+    assertEquals(
+        "nested-original", ((GenericRecord) decoded.get("Nested__c")).get("Value__c").toString());
+    assertEquals(
+        List.of("alpha", "beta"),
+        ((Collection<?>) decoded.get("Tags__c")).stream().map(Object::toString).toList());
+    assertArrayEquals(
+        new byte[] {1, 2, 3}, remainingBytes((ByteBuffer) decoded.get("BinaryArray__c")));
+    assertArrayEquals(
+        new byte[] {9, 10}, remainingBytes((ByteBuffer) decoded.get("BinaryBuffer__c")));
   }
 
   @Test
@@ -641,9 +779,30 @@ class SalesforcePublisherTest {
   }
 
   private static GenericRecord decode(byte[] payload) throws Exception {
-    Schema schema = new Schema.Parser().parse(SCHEMA_JSON);
+    return decode(payload, SCHEMA_JSON);
+  }
+
+  private static GenericRecord decode(byte[] payload, String schemaJson) throws Exception {
+    Schema schema = new Schema.Parser().parse(schemaJson);
     return new GenericDatumReader<GenericRecord>(schema)
         .read(null, DecoderFactory.get().binaryDecoder(new ByteArrayInputStream(payload), null));
+  }
+
+  private static byte[] remainingBytes(ByteBuffer value) {
+    ByteBuffer copy = value.asReadOnlyBuffer();
+    byte[] bytes = new byte[copy.remaining()];
+    copy.get(bytes);
+    return bytes;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> mapValue(Object value) {
+    return (Map<String, Object>) value;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<Object> listValue(Object value) {
+    return (List<Object>) value;
   }
 
   private enum ResponseMode {
@@ -655,6 +814,7 @@ class SalesforcePublisherTest {
     MULTIPLE,
     MISMATCHED_CORRELATION,
     RPC_UNAUTHENTICATED,
+    HOLD_TOPIC,
     HOLD_PUBLISH
   }
 
@@ -699,11 +859,15 @@ class SalesforcePublisherTest {
     private final Map<String, Integer> schemaRequestCounts = new LinkedHashMap<>();
     private final CountDownLatch firstHeldSchemaRequest = new CountDownLatch(1);
     private final CountDownLatch twoHeldSchemaRequests = new CountDownLatch(2);
+    private final CountDownLatch heldTopicReceived = new CountDownLatch(1);
+    private final CountDownLatch heldTopicCancelled = new CountDownLatch(1);
     private final CountDownLatch publishReceived = new CountDownLatch(1);
     private final CountDownLatch publishCancelled = new CountDownLatch(1);
     private int schemaCalls;
     private int publishCalls;
     private final List<StreamObserver<SchemaInfo>> heldSchemaObservers = new ArrayList<>();
+    private StreamObserver<TopicInfo> heldTopicObserver;
+    private String heldTopicName;
     private StreamObserver<PublishResponse> heldPublishObserver;
     private PublishResponse heldPublishResponse;
     private ResponseMode responseMode = ResponseMode.SUCCESS;
@@ -713,6 +877,15 @@ class SalesforcePublisherTest {
       callOrder.add("GetTopic");
       String topic = request.getTopicName();
       topicNames.add(topic);
+      if (responseMode == ResponseMode.HOLD_TOPIC) {
+        ServerCallStreamObserver<TopicInfo> serverObserver =
+            (ServerCallStreamObserver<TopicInfo>) observer;
+        serverObserver.setOnCancelHandler(heldTopicCancelled::countDown);
+        heldTopicObserver = observer;
+        heldTopicName = topic;
+        heldTopicReceived.countDown();
+        return;
+      }
       if (topic.isBlank() || "/event/Missing__e".equals(topic)) {
         observer.onError(Status.NOT_FOUND.asRuntimeException());
         return;
@@ -752,6 +925,8 @@ class SalesforcePublisherTest {
               {"name":"Optional__c","type":["null","string"],"default":null}
             ]}
             """;
+      } else if ("schema-snapshot".equals(request.getSchemaId())) {
+        schemaJson = SNAPSHOT_SCHEMA_JSON;
       }
       observer.onNext(
           SchemaInfo.newBuilder().setSchemaId(responseSchemaId).setSchemaJson(schemaJson).build());
@@ -818,6 +993,31 @@ class SalesforcePublisherTest {
       return publishReceived.await(5, TimeUnit.SECONDS);
     }
 
+    private boolean awaitHeldTopicReceived() throws InterruptedException {
+      return heldTopicReceived.await(5, TimeUnit.SECONDS);
+    }
+
+    private boolean awaitHeldTopicCancellation() throws InterruptedException {
+      return heldTopicCancelled.await(5, TimeUnit.SECONDS);
+    }
+
+    private void releaseHeldTopic() {
+      StreamObserver<TopicInfo> observer = heldTopicObserver;
+      heldTopicObserver = null;
+      try {
+        observer.onNext(
+            TopicInfo.newBuilder()
+                .setTopicName(heldTopicName)
+                .setCanPublish(true)
+                .setCanSubscribe(true)
+                .setSchemaId(schemaIdFor(heldTopicName))
+                .build());
+        observer.onCompleted();
+      } catch (RuntimeException ignored) {
+        // The in-process server may reject a deliberately late response after cancellation.
+      }
+    }
+
     private boolean awaitPublishCancellation() throws InterruptedException {
       return publishCancelled.await(5, TimeUnit.SECONDS);
     }
@@ -868,6 +1068,9 @@ class SalesforcePublisherTest {
       }
       if ("/event/Permissive__e".equals(topic)) {
         return "schema-permissive";
+      }
+      if ("/event/Snapshot__e".equals(topic)) {
+        return "schema-snapshot";
       }
       if (topic.startsWith("/event/Eviction_")) {
         return "schema-eviction-"

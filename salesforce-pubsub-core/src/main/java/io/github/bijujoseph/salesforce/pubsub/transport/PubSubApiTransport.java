@@ -406,8 +406,11 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
     PublishResult result = response.getResults(0);
     if (result.hasError()) {
-      throw new PublishException(
-          "Salesforce Pub/Sub Publish result failed [code=" + result.getError().getCode() + "]");
+      throw new PublishResultFailure(
+          new PublishException(
+              "Salesforce Pub/Sub Publish result failed [code="
+                  + result.getError().getCode()
+                  + "]"));
     }
     if (result.getReplayId().isEmpty()) {
       throw new PublishException("Salesforce Pub/Sub Publish returned an empty replay ID");
@@ -713,6 +716,10 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     private void failMappedResponse(RuntimeException failure, String reason) {
+      if (failure instanceof PublishResultFailure resultFailure) {
+        failExpectedPublishResult(resultFailure.failure(), reason);
+        return;
+      }
       if (!(failure instanceof SalesforcePubSubException domainFailure)) {
         failAndCancel(failure, reason);
         return;
@@ -725,6 +732,16 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       cancelClientCall(clientCall.get());
       cancelRequest(requestStream.get(), reason);
       super.completeExceptionally(domainFailure);
+    }
+
+    private void failExpectedPublishResult(PublishException failure, String reason) {
+      if (!terminateState()) {
+        return;
+      }
+      notifyTerminal();
+      cancelClientCall(clientCall.get());
+      cancelRequest(requestStream.get(), reason);
+      super.completeExceptionally(failure);
     }
 
     private static void cancelRequest(ClientCallStreamObserver<?> stream) {
@@ -1513,5 +1530,21 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     TOPIC,
     SCHEMA,
     PUBLISH
+  }
+
+  private static final class PublishResultFailure extends RuntimeException {
+
+    private static final long serialVersionUID = 1L;
+
+    private final PublishException failure;
+
+    private PublishResultFailure(PublishException failure) {
+      super(null, failure, false, false);
+      this.failure = failure;
+    }
+
+    private PublishException failure() {
+      return failure;
+    }
   }
 }
