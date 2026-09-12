@@ -1,132 +1,15 @@
 name: Copilot review labels
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
-  cancel-in-progress: true
 on:
-  # pull_request_target runs in the base repo context, so it is not held in the
-  # "manual approval required" state that pull_request / pull_request_review
-  # runs get stuck in when the reviewer (Copilot) is not a project committer.
   pull_request_target:
-    types: [opened, reopened, synchronize, review_requested, ready_for_review]
-  # Poll periodically so the labels catch up even if no PR event fires when
-  # Copilot submits its review.
-  schedule:
-    - cron: "*/10 * * * *"
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "Pull request number to label"
-        required: false
+    types: [review_requested]
 permissions:
   pull-requests: write
 jobs:
   label:
+    if: contains(github.event.requested_reviewer.login, 'copilot')
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
     steps:
-      - name: Sync Copilot review labels
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Collect target PR numbers based on the trigger.
-          declare -a prs=()
-          case "${{ github.event_name }}" in
-            pull_request_target)
-              prs+=("${{ github.event.pull_request.number }}")
-              ;;
-            workflow_dispatch)
-              if [[ -n "${{ github.event.inputs.pr_number }}" ]]; then
-                prs+=("${{ github.event.inputs.pr_number }}")
-              else
-                mapfile -t prs < <(gh pr list --state open --json number --jq '.[].number')
-              fi
-              ;;
-            schedule|*)
-              mapfile -t prs < <(gh pr list --state open --json number --jq '.[].number')
-              ;;
-          esac
-
-          if [[ ${#prs[@]} -eq 0 ]]; then
-            echo "No open PRs to process."
-            exit 0
-          fi
-
-          for pr in "${prs[@]}"; do
-            [[ -z "$pr" ]] && continue
-            echo "::group::PR #$pr"
-
-            # Fetch requested reviewers and reviews in one call each.
-            pr_json=$(gh pr view "$pr" --json reviewRequests,reviews,state,isDraft)
-            state=$(jq -r '.state' <<<"$pr_json")
-            is_draft=$(jq -r '.isDraft' <<<"$pr_json")
-
-            if [[ "$state" != "OPEN" ]]; then
-              echo "PR #$pr is $state; skipping."
-              echo "::endgroup::"
-              continue
-            fi
-
-            # Is Copilot currently a requested reviewer?
-            copilot_requested=$(jq -r '
-              [.reviewRequests[]?
-                | (.login // .name // .slug // "")
-                | select(test("copilot"; "i"))]
-              | length > 0
-            ' <<<"$pr_json")
-
-            # Latest Copilot review state, if any.
-            latest_copilot_state=$(jq -r '
-              [.reviews[]?
-                | select((.author.login // "") | test("copilot"; "i"))]
-              | sort_by(.submittedAt)
-              | last
-              | (.state // "")
-            ' <<<"$pr_json")
-
-            desired=""
-            if [[ "$copilot_requested" == "true" && "$is_draft" != "true" ]]; then
-              # Copilot is still on the request list -> reviewing.
-              desired="copilot-reviewing"
-            elif [[ -n "$latest_copilot_state" && "$latest_copilot_state" != "null" ]]; then
-              case "$latest_copilot_state" in
-                APPROVED)
-                  desired="copilot-approved"
-                  ;;
-                CHANGES_REQUESTED|COMMENTED|DISMISSED)
-                  desired="copilot-changes-requested"
-                  ;;
-              esac
-            fi
-
-            echo "PR #$pr desired=${desired:-<none>} requested=$copilot_requested last=$latest_copilot_state"
-
-            # Reconcile labels: add desired, remove the other two.
-            all=(copilot-reviewing copilot-approved copilot-changes-requested)
-            add_args=()
-            remove_args=()
-            for lbl in "${all[@]}"; do
-              if [[ "$lbl" == "$desired" ]]; then
-                add_args+=(--add-label "$lbl")
-              else
-                remove_args+=(--remove-label "$lbl")
-              fi
-            done
-
-            # gh pr edit fails if a label to remove isn't present; guard it.
-            current_labels=$(gh pr view "$pr" --json labels --jq '[.labels[].name] | join(",")')
-            filtered_remove=()
-            for ((i=0; i<${#remove_args[@]}; i+=2)); do
-              lbl="${remove_args[i+1]}"
-              if [[ ",$current_labels," == *",$lbl,"* ]]; then
-                filtered_remove+=(--remove-label "$lbl")
-              fi
-            done
-
-            if [[ ${#add_args[@]} -gt 0 || ${#filtered_remove[@]} -gt 0 ]]; then
-              gh pr edit "$pr" "${add_args[@]}" "${filtered_remove[@]}" || true
-            fi
-            echo "::endgroup::"
-          done
+      - run: gh pr edit "$PR_URL" --add-label "copilot-reviewing"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
