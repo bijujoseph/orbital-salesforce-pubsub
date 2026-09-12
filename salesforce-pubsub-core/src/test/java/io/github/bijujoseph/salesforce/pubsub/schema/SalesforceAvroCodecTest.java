@@ -224,6 +224,9 @@ class SalesforceAvroCodecTest {
     payload.remove("text");
 
     assertThrows(EventEncodeException.class, () -> codec.encode(SCHEMA_ID, payload));
+
+    payload.put("text", null);
+    assertThrows(EventEncodeException.class, () -> codec.encode(SCHEMA_ID, payload));
   }
 
   @Test
@@ -248,16 +251,27 @@ class SalesforceAvroCodecTest {
   }
 
   @Test
-  void byteBufferInputsAreCopiedAndEncoded() {
+  void byteBufferInputsEncodeOnlyIndependentRemainingBytes() {
     Map<String, Object> payload = completePayload();
-    ByteBuffer bytes = ByteBuffer.wrap(new byte[] {0x01, 0x02});
+    ByteBuffer bytes = ByteBuffer.wrap(new byte[] {0x00, 0x01, 0x02, 0x03});
+    bytes.position(1);
+    bytes.limit(3);
     payload.put("binary", bytes);
 
     byte[] encoded = codec.encode(SCHEMA_ID, payload);
-    bytes.put(0, (byte) 0x7F);
+    bytes.put(1, (byte) 0x7F);
 
     assertArrayEquals(
         new byte[] {0x01, 0x02}, (byte[]) codec.decode(SCHEMA_ID, encoded).get("binary"));
+  }
+
+  @ParameterizedTest
+  @MethodSource("wrongLogicalValues")
+  void wrongLogicalTypesRaiseTypedEncodeFailure(String field, Object value) {
+    Map<String, Object> payload = completePayload();
+    payload.put(field, value);
+
+    assertThrows(EventEncodeException.class, () -> codec.encode(SCHEMA_ID, payload));
   }
 
   @Test
@@ -306,6 +320,18 @@ class SalesforceAvroCodecTest {
     assertThrows(
         EventDecodeException.class,
         () -> codec.decode("decoded-enum", encodeDatum(enumRecord, datum)));
+  }
+
+  @ParameterizedTest
+  @MethodSource("unsupportedAvroValues")
+  void mapAndFixedAvroValuesFailAsTypedErrorsWithoutEscapingAvroTypes(
+      String schemaId, Schema schema, Object datum, Object neutralValue) throws IOException {
+    schemas.put(schemaId, schema);
+
+    assertThrows(
+        EventDecodeException.class, () -> codec.decode(schemaId, encodeDatum(schema, datum)));
+    assertThrows(
+        EventEncodeException.class, () -> codec.encode(schemaId, Map.of("value", neutralValue)));
   }
 
   @Test
@@ -382,6 +408,34 @@ class SalesforceAvroCodecTest {
         Arguments.of("tags", "not-an-array"),
         Arguments.of("children", List.of("not-a-record")),
         Arguments.of("binary", "not-bytes"));
+  }
+
+  private static Stream<Arguments> wrongLogicalValues() {
+    return Stream.of(
+        Arguments.of("businessDate", Instant.EPOCH),
+        Arguments.of("occurredAt", LocalDate.ofEpochDay(0)),
+        Arguments.of("preciseAt", 0L));
+  }
+
+  private static Stream<Arguments> unsupportedAvroValues() {
+    Schema mapRecord =
+        new Schema.Parser()
+            .parse(
+                "{\"type\":\"record\",\"name\":\"MapRecord\",\"fields\":[{\"name\":\"value\",\"type\":{\"type\":\"map\",\"values\":\"string\"}}]}");
+    GenericRecord mapDatum = new GenericData.Record(mapRecord);
+    mapDatum.put("value", Map.of("key", "value"));
+
+    Schema fixedRecord =
+        new Schema.Parser()
+            .parse(
+                "{\"type\":\"record\",\"name\":\"FixedRecord\",\"fields\":[{\"name\":\"value\",\"type\":{\"type\":\"fixed\",\"name\":\"FourBytes\",\"size\":4}}]}");
+    GenericRecord fixedDatum = new GenericData.Record(fixedRecord);
+    fixedDatum.put(
+        "value", new GenericData.Fixed(fixedRecord.getField("value").schema(), new byte[4]));
+
+    return Stream.of(
+        Arguments.of("map", mapRecord, mapDatum, Map.of("key", "value")),
+        Arguments.of("fixed", fixedRecord, fixedDatum, new byte[4]));
   }
 
   private static Map<String, Object> singletonNullableMap(String key, Object value) {
