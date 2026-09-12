@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
@@ -44,6 +45,7 @@ import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
 import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
 import io.github.bijujoseph.salesforce.pubsub.error.SchemaLookupException;
+import io.github.bijujoseph.salesforce.pubsub.error.SubscriptionException;
 import io.github.bijujoseph.salesforce.pubsub.error.TopicNotFoundException;
 import io.github.bijujoseph.salesforce.pubsub.error.TransportException;
 import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
@@ -444,8 +446,7 @@ class PubSubApiTransportTest {
     CompletableFuture<TopicMetadata> response = transport.getTopic("failure").toCompletableFuture();
 
     Exception wrapper = assertThrows(Exception.class, () -> response.get(5, TimeUnit.SECONDS));
-    SalesforcePubSubException failure =
-        assertInstanceOf(SalesforcePubSubException.class, wrapper.getCause());
+    TransportException failure = assertInstanceOf(TransportException.class, wrapper.getCause());
 
     assertEquals("Salesforce Pub/Sub RPC failed [INTERNAL]", failure.getMessage());
     assertNull(failure.getCause());
@@ -477,6 +478,24 @@ class PubSubApiTransportTest {
     assertEquals("missing-schema", schema.schemaId());
     assertNull(schema.getCause());
     assertSafe(schema.toString());
+  }
+
+  @Test
+  void subscribeRpcFailuresUseSubscriptionCategoryWithoutMaskingAuthCategories() throws Exception {
+    assertSubscriptionFailure(
+        Status.Code.UNAVAILABLE, SubscriptionException.class, "WARN", ConnectorStatus.DEGRADED);
+    assertSubscriptionFailure(
+        Status.Code.INTERNAL, SubscriptionException.class, "ERROR", ConnectorStatus.FAILED);
+    assertSubscriptionFailure(
+        Status.Code.UNAUTHENTICATED,
+        AuthenticationException.class,
+        "ERROR",
+        ConnectorStatus.FAILED);
+    assertSubscriptionFailure(
+        Status.Code.PERMISSION_DENIED,
+        AuthorizationException.class,
+        "ERROR",
+        ConnectorStatus.FAILED);
   }
 
   @Test
@@ -551,6 +570,8 @@ class PubSubApiTransportTest {
               () -> subscription.completion().toCompletableFuture().get(5, TimeUnit.SECONDS));
       Exception observerWrapper =
           assertThrows(Exception.class, () -> observerResult.get(5, TimeUnit.SECONDS));
+      assertInstanceOf(SubscriptionException.class, completionWrapper.getCause());
+      assertInstanceOf(SubscriptionException.class, observerWrapper.getCause());
       assertSafe(completionWrapper.toString());
       assertSafe(completionWrapper.getCause().toString());
       assertSafe(observerWrapper.toString());
@@ -593,6 +614,7 @@ class PubSubApiTransportTest {
           assertThrows(
               Exception.class,
               () -> subscription.completion().toCompletableFuture().get(5, TimeUnit.SECONDS));
+      assertInstanceOf(SubscriptionException.class, failure.getCause());
       assertEquals(1, failingChannel.starts.get());
       assertEquals(1, failingChannel.cancels.get());
       assertEquals(1, downstream.errors.get());
@@ -1335,9 +1357,9 @@ class PubSubApiTransportTest {
       subscription.attachClientCall(call);
       subscription.attachFallback(stream);
 
-      SalesforcePubSubException failure =
+      SubscriptionException failure =
           assertThrows(
-              SalesforcePubSubException.class,
+              SubscriptionException.class,
               () -> {
                 if (failSend) {
                   subscription.send(FetchRequest.getDefaultInstance());
@@ -1654,6 +1676,7 @@ class PubSubApiTransportTest {
         assertThrows(
             Exception.class,
             () -> harness.subscription().completion().toCompletableFuture().join());
+    assertInstanceOf(SubscriptionException.class, failure.getCause());
     assertFalse(harness.subscription().isCancelled());
     assertSafe(failure.toString());
     assertEquals(0, downstream.next.get());
@@ -1686,6 +1709,25 @@ class PubSubApiTransportTest {
     assertFalse(terminal.subscription().isCancelled());
     assertEquals(1, terminalDownstream.completed.get());
     assertEquals(0, terminalDownstream.errors.get());
+  }
+
+  @Test
+  void cancelledAndTerminatedSubscriptionMisuseIsTypedAsSubscriptionFailure() {
+    SubscriptionHarness cancelled = subscriptionHarness(new RecordingObserver<>());
+    cancelled.subscription().cancel();
+
+    SubscriptionException cancelledFailure =
+        assertThrows(
+            SubscriptionException.class,
+            () -> cancelled.subscription().send(FetchRequest.getDefaultInstance()));
+    assertEquals("Salesforce Pub/Sub subscription is not active", cancelledFailure.getMessage());
+
+    SubscriptionHarness terminated = subscriptionHarness(new RecordingObserver<>());
+    terminated.responses().onCompleted();
+
+    SubscriptionException terminatedFailure =
+        assertThrows(SubscriptionException.class, terminated.subscription()::complete);
+    assertEquals("Salesforce Pub/Sub subscription is not active", terminatedFailure.getMessage());
   }
 
   @Test
@@ -1774,6 +1816,7 @@ class PubSubApiTransportTest {
         assertThrows(Exception.class, () -> subscription.completion().toCompletableFuture().join());
     assertSafe(failure.toString());
     assertNotNull(failure.getCause());
+    assertInstanceOf(SubscriptionException.class, failure.getCause());
     assertSafe(failure.getCause().toString());
   }
 
@@ -1867,6 +1910,45 @@ class PubSubApiTransportTest {
         assertThrows(
             Exception.class, () -> transport.getTopic("/event/Test__e").get(5, TimeUnit.SECONDS));
     assertInstanceOf(expectedType, wrapper.getCause());
+    assertEquals(1, logger.events().size());
+    RecordingLogger.LogEvent event = logger.events().getFirst();
+    assertEquals(expectedLevel, event.level());
+    assertEquals(
+        java.util.Map.of("grpcStatus", code, "exceptionCategory", expectedType.getSimpleName()),
+        event.keyValues());
+    assertSafe(event.toString());
+    assertFalse(event.toString().contains("payload"));
+    assertFalse(event.toString().contains("replay"));
+    assertFalse(event.toString().contains("PII"));
+  }
+
+  private void assertSubscriptionFailure(
+      Status.Code code,
+      Class<? extends SalesforcePubSubException> expectedType,
+      String expectedLevel,
+      ConnectorStatus expectedHealth)
+      throws Exception {
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    RecordingLogger logger = new RecordingLogger();
+    restartServer(new CategorizedFailingService(code), health, logger);
+    RecordingObserver<FetchResponse> downstream = new RecordingObserver<>();
+
+    PubSubApiTransport.SubscriptionRpc subscription = transport.subscribe(downstream);
+    Exception wrapper =
+        assertThrows(
+            Exception.class,
+            () -> subscription.completion().toCompletableFuture().get(5, TimeUnit.SECONDS));
+
+    SalesforcePubSubException failure = assertInstanceOf(expectedType, wrapper.getCause());
+    assertSame(failure, downstream.failure.get());
+    assertNull(failure.getCause());
+    if (expectedType == SubscriptionException.class) {
+      assertEquals(
+          "Salesforce Pub/Sub subscription failed [" + code.name() + "]", failure.getMessage());
+    }
+    assertSafe(failure.toString());
+    assertEquals(expectedHealth, health.status());
     assertEquals(1, logger.events().size());
     RecordingLogger.LogEvent event = logger.events().getFirst();
     assertEquals(expectedLevel, event.level());
@@ -2370,6 +2452,7 @@ class PubSubApiTransportTest {
     private final AtomicInteger next = new AtomicInteger();
     private final AtomicInteger errors = new AtomicInteger();
     private final AtomicInteger completed = new AtomicInteger();
+    private final AtomicReference<Throwable> failure = new AtomicReference<>();
 
     @Override
     public void onNext(T value) {
@@ -2379,6 +2462,7 @@ class PubSubApiTransportTest {
     @Override
     public void onError(Throwable failure) {
       errors.incrementAndGet();
+      this.failure.set(failure);
     }
 
     @Override
@@ -2660,6 +2744,21 @@ class PubSubApiTransportTest {
     @Override
     public void getSchema(SchemaRequest request, StreamObserver<SchemaInfo> observer) {
       observer.onError(failure());
+    }
+
+    @Override
+    public StreamObserver<FetchRequest> subscribe(StreamObserver<FetchResponse> observer) {
+      observer.onError(failure());
+      return new StreamObserver<>() {
+        @Override
+        public void onNext(FetchRequest request) {}
+
+        @Override
+        public void onError(Throwable failure) {}
+
+        @Override
+        public void onCompleted() {}
+      };
     }
 
     private RuntimeException failure() {

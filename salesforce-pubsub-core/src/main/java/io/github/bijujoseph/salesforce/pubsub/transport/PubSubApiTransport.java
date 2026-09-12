@@ -31,6 +31,7 @@ import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
 import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
 import io.github.bijujoseph.salesforce.pubsub.error.SchemaLookupException;
+import io.github.bijujoseph.salesforce.pubsub.error.SubscriptionException;
 import io.github.bijujoseph.salesforce.pubsub.error.TopicNotFoundException;
 import io.github.bijujoseph.salesforce.pubsub.error.TransportException;
 import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
@@ -904,7 +905,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         requestObserver.onNext(request);
       } catch (RuntimeException exception) {
         SalesforcePubSubException sanitized = failOutbound(SubscriptionState.SENDING, exception);
-        throw sanitized == null ? sanitize(exception) : sanitized;
+        throw sanitized == null ? mapSubscriptionFailure(statusCode(exception)) : sanitized;
       } finally {
         state.compareAndSet(SubscriptionState.SENDING, SubscriptionState.ACTIVE);
         releaseOutbound(outbound);
@@ -1131,7 +1132,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     private SalesforcePubSubException mapAndReport(Throwable failure) {
       Status.Code code = statusCode(failure);
-      SalesforcePubSubException sanitized = mapFailure(code, FailureContext.none());
+      SalesforcePubSubException sanitized = mapSubscriptionFailure(code);
       try {
         failureReporter.accept(code, sanitized);
       } catch (RuntimeException ignored) {
@@ -1170,7 +1171,16 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     private static SalesforcePubSubException inactiveSubscription() {
-      return new SalesforcePubSubException("Salesforce Pub/Sub subscription is not active");
+      return new SubscriptionException("Salesforce Pub/Sub subscription is not active");
+    }
+
+    private static SalesforcePubSubException mapSubscriptionFailure(Status.Code code) {
+      return switch (code) {
+        case UNAUTHENTICATED, PERMISSION_DENIED -> mapFailure(code, FailureContext.none());
+        default ->
+            new SubscriptionException(
+                "Salesforce Pub/Sub subscription failed [" + code.name() + "]");
+      };
     }
 
     private static void cancelClientStream(
