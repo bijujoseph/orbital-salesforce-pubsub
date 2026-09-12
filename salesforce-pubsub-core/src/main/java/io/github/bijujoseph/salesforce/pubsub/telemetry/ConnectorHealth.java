@@ -83,8 +83,16 @@ public final class ConnectorHealth {
   }
 
   private void publish(ConnectorStatus next) {
+    publishTelemetry(() -> telemetry.connectionState(connectionName, next));
+    if (next == ConnectorStatus.CONNECTED) {
+      publishTelemetry(() -> telemetry.connected(connectionName));
+    }
+    logTransition(next);
+  }
+
+  private void publishTelemetry(Runnable callback) {
     try {
-      telemetry.connectionState(connectionName, next);
+      callback.run();
     } catch (RuntimeException telemetryFailure) {
       logger
           .atWarn()
@@ -92,6 +100,9 @@ public final class ConnectorHealth {
           .addKeyValue("exceptionCategory", telemetryFailure.getClass().getSimpleName())
           .log("Salesforce Pub/Sub telemetry callback failed");
     }
+  }
+
+  private void logTransition(ConnectorStatus next) {
     switch (next) {
       case RECONNECTING, DEGRADED ->
           logger

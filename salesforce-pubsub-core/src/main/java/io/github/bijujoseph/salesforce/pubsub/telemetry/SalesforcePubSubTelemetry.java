@@ -45,17 +45,21 @@ public interface SalesforcePubSubTelemetry {
   }
 
   default void connectionState(String connectionName, ConnectorStatus status) {
-    metric(
-        SalesforcePubSubMetric.CONNECTION_STATE,
-        1,
-        new MetricLabels(connectionName, null, status.name(), null));
+    for (ConnectorStatus candidate : ConnectorStatus.values()) {
+      metric(
+          SalesforcePubSubMetric.CONNECTION_STATE,
+          candidate == status ? 1 : 0,
+          new MetricLabels(connectionName, null, candidate.name(), null));
+    }
   }
 
   default void subscriptionState(String connectionName, String topic, ConnectorStatus status) {
-    metric(
-        SalesforcePubSubMetric.SUBSCRIPTION_STATE,
-        1,
-        new MetricLabels(connectionName, topic, status.name(), null));
+    for (ConnectorStatus candidate : ConnectorStatus.values()) {
+      metric(
+          SalesforcePubSubMetric.SUBSCRIPTION_STATE,
+          candidate == status ? 1 : 0,
+          new MetricLabels(connectionName, topic, candidate.name(), null));
+    }
   }
 
   default void eventEmitted(String topic) {

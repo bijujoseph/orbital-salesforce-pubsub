@@ -17,6 +17,8 @@
 package io.github.bijujoseph.salesforce.pubsub.auth;
 
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorStatus;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,30 +36,47 @@ import org.slf4j.LoggerFactory;
  */
 public final class UserSuppliedAuthProvider implements SalesforceAuthProvider {
 
-  private static final Logger LOGGER = LoggerFactory.getLogger(UserSuppliedAuthProvider.class);
+  private static final Logger DEFAULT_LOGGER =
+      LoggerFactory.getLogger(UserSuppliedAuthProvider.class);
 
   private final AtomicReference<SalesforceSession> session;
   private final Supplier<SalesforceSession> sessionSupplier;
+  private final ConnectorHealth health;
+  private final Logger logger;
   private final Object sessionLock = new Object();
 
   public UserSuppliedAuthProvider(SalesforceSession session) {
+    this(session, null);
+  }
+
+  public UserSuppliedAuthProvider(SalesforceSession session, ConnectorHealth health) {
     this.session = new AtomicReference<>(requireSession(session));
     this.sessionSupplier = null;
+    this.health = health;
+    this.logger = DEFAULT_LOGGER;
   }
 
   public UserSuppliedAuthProvider(Supplier<SalesforceSession> sessionSupplier) {
+    this(sessionSupplier, null);
+  }
+
+  public UserSuppliedAuthProvider(
+      Supplier<SalesforceSession> sessionSupplier, ConnectorHealth health) {
     this.session = new AtomicReference<>();
     if (sessionSupplier == null) {
       throw new AuthenticationException("Missing session supplier");
     }
     this.sessionSupplier = sessionSupplier;
+    this.health = health;
+    this.logger = DEFAULT_LOGGER;
   }
 
   @Override
   public CompletionStage<SalesforceSession> authenticate() {
+    transitionHealth(ConnectorStatus.AUTHENTICATING);
     try {
       SalesforceSession loaded = loadSession();
-      LOGGER.atInfo().log("Caller-supplied Salesforce session acquired");
+      logger.atInfo().log("Caller-supplied Salesforce session acquired");
       return CompletableFuture.completedFuture(loaded);
     } catch (AuthenticationException exception) {
       logAuthenticationFailure();
@@ -124,10 +143,17 @@ public final class UserSuppliedAuthProvider implements SalesforceAuthProvider {
     return result;
   }
 
-  private static void logAuthenticationFailure() {
-    LOGGER
+  private void logAuthenticationFailure() {
+    logger
         .atError()
         .addKeyValue("exceptionCategory", AuthenticationException.class.getSimpleName())
         .log("Caller-supplied Salesforce session acquisition failed");
+    transitionHealth(ConnectorStatus.FAILED);
+  }
+
+  private void transitionHealth(ConnectorStatus status) {
+    if (health != null) {
+      health.transitionTo(status);
+    }
   }
 }

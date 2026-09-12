@@ -46,6 +46,10 @@ import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
 import io.github.bijujoseph.salesforce.pubsub.error.SchemaLookupException;
 import io.github.bijujoseph.salesforce.pubsub.error.TopicNotFoundException;
 import io.github.bijujoseph.salesforce.pubsub.error.TransportException;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorStatus;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.SalesforcePubSubTelemetry;
+import io.github.bijujoseph.salesforce.pubsub.testing.RecordingLogger;
 import io.grpc.Attributes;
 import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
@@ -473,6 +477,36 @@ class PubSubApiTransportTest {
     assertEquals("missing-schema", schema.schemaId());
     assertNull(schema.getCause());
     assertSafe(schema.toString());
+  }
+
+  @Test
+  void representativeGrpcFailuresLogOnceAtSafeSeverityWithOnlySafeFields() throws Exception {
+    assertFailureLog(Status.Code.CANCELLED, "DEBUG", TransportException.class);
+    assertFailureLog(Status.Code.UNAVAILABLE, "WARN", TransportException.class);
+    assertFailureLog(Status.Code.UNAUTHENTICATED, "ERROR", AuthenticationException.class);
+    assertFailureLog(Status.Code.PERMISSION_DENIED, "ERROR", AuthorizationException.class);
+    assertFailureLog(Status.Code.INTERNAL, "ERROR", TransportException.class);
+  }
+
+  @Test
+  void successfulTransportBoundariesPublishConnectedAndStoppedHealth() throws Exception {
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    RecordingLogger logger = new RecordingLogger();
+    restartServer(new RespondingService(), health, logger);
+
+    transport.getTopic("/event/Test__e").get(5, TimeUnit.SECONDS);
+
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+    assertEquals(1, telemetry.connected.get());
+    assertEquals(List.of(ConnectorStatus.STARTING, ConnectorStatus.CONNECTED), telemetry.statuses);
+
+    transport.close();
+
+    assertEquals(ConnectorStatus.STOPPED, health.status());
+    assertEquals(
+        List.of(ConnectorStatus.STARTING, ConnectorStatus.CONNECTED, ConnectorStatus.STOPPED),
+        telemetry.statuses);
   }
 
   @Test
@@ -914,6 +948,24 @@ class PubSubApiTransportTest {
 
     assertTrue(result.isCancelled());
     assertThrows(java.util.concurrent.CancellationException.class, result::join);
+  }
+
+  @Test
+  void onlyTheWinningUnaryTerminalFailureIsMappedAndReported() {
+    List<Status.Code> reported = new ArrayList<>();
+    PubSubApiTransport.CancellableRpcFuture<String> result =
+        new PubSubApiTransport.CancellableRpcFuture<>((code, ignoredFailure) -> reported.add(code));
+    PubSubApiTransport.UnaryResponseObserver<String, String> observer =
+        new PubSubApiTransport.UnaryResponseObserver<>(result, value -> value);
+
+    observer.onError(Status.UNAVAILABLE.asRuntimeException());
+    observer.onError(Status.INTERNAL.asRuntimeException());
+
+    assertEquals(List.of(Status.Code.UNAVAILABLE), reported);
+    TransportException failure =
+        assertInstanceOf(
+            TransportException.class, assertThrows(Exception.class, result::join).getCause());
+    assertEquals("Salesforce Pub/Sub RPC failed [UNAVAILABLE]", failure.getMessage());
   }
 
   @Test
@@ -1803,12 +1855,47 @@ class PubSubApiTransportTest {
     assertSafe(failure.toString());
   }
 
+  private void assertFailureLog(
+      Status.Code code,
+      String expectedLevel,
+      Class<? extends SalesforcePubSubException> expectedType)
+      throws Exception {
+    RecordingLogger logger = new RecordingLogger();
+    restartServer(new CategorizedFailingService(code), null, logger);
+
+    Exception wrapper =
+        assertThrows(
+            Exception.class, () -> transport.getTopic("/event/Test__e").get(5, TimeUnit.SECONDS));
+    assertInstanceOf(expectedType, wrapper.getCause());
+    assertEquals(1, logger.events().size());
+    RecordingLogger.LogEvent event = logger.events().getFirst();
+    assertEquals(expectedLevel, event.level());
+    assertEquals(
+        java.util.Map.of("grpcStatus", code, "exceptionCategory", expectedType.getSimpleName()),
+        event.keyValues());
+    assertSafe(event.toString());
+    assertFalse(event.toString().contains("payload"));
+    assertFalse(event.toString().contains("replay"));
+    assertFalse(event.toString().contains("PII"));
+  }
+
   private void restartServer(PubSubGrpc.PubSubImplBase service) throws Exception {
     closeCurrentResources();
     received.clear();
     receivedCalls.set(0);
     startServer(service);
     transport = new PubSubApiTransport(channel, session(0));
+  }
+
+  private void restartServer(
+      PubSubGrpc.PubSubImplBase service, ConnectorHealth health, RecordingLogger logger)
+      throws Exception {
+    closeCurrentResources();
+    received.clear();
+    receivedCalls.set(0);
+    startServer(service);
+    transport =
+        new PubSubApiTransport(channel, session(0), () -> {}, () -> {}, health, logger.proxy());
   }
 
   private void restartServer(
@@ -2040,6 +2127,21 @@ class PubSubApiTransportTest {
   private record SessionHeaders(String accessToken, String instanceUrl, String tenantId) {}
 
   private record ObservedCall(String method, SessionHeaders headers) {}
+
+  private static final class RecordingTelemetry implements SalesforcePubSubTelemetry {
+    private final List<ConnectorStatus> statuses = new ArrayList<>();
+    private final AtomicInteger connected = new AtomicInteger();
+
+    @Override
+    public void connectionState(String connectionName, ConnectorStatus status) {
+      statuses.add(status);
+    }
+
+    @Override
+    public void connected(String connectionName) {
+      connected.incrementAndGet();
+    }
+  }
 
   private record SubscriptionHarness(
       PubSubApiTransport.SubscriptionRpc subscription,

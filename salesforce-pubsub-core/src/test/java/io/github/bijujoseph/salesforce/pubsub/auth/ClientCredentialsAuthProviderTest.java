@@ -28,6 +28,10 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorStatus;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.SalesforcePubSubTelemetry;
+import io.github.bijujoseph.salesforce.pubsub.testing.RecordingLogger;
 import java.io.IOException;
 import java.net.Authenticator;
 import java.net.CookieHandler;
@@ -165,9 +169,17 @@ class ClientCredentialsAuthProviderTest {
                 exchange,
                 400,
                 "{\"error\":\"invalid_client\",\"error_description\":\"client-secret-is-secret\"}"));
+    RecordingLogger logger = new RecordingLogger();
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
     ClientCredentialsAuthProvider provider =
         new ClientCredentialsAuthProvider(
-            "http://localhost:" + server.getAddress().getPort(), "client", "client-secret");
+            "http://localhost:" + server.getAddress().getPort(),
+            "client",
+            "client-secret",
+            HttpClient.newHttpClient(),
+            health,
+            logger.proxy());
 
     CompletionException failure =
         assertThrows(
@@ -179,14 +191,26 @@ class ClientCredentialsAuthProviderTest {
         authenticationException.getMessage());
     assertFalse(authenticationException.getMessage().contains("client-secret-is-secret"));
     assertFalse(authenticationException.getMessage().contains("client-secret"));
+    assertAuthenticationLog(logger, "AuthenticationException");
+    assertEquals(ConnectorStatus.FAILED, health.status());
+    assertEquals(
+        java.util.List.of(
+            ConnectorStatus.STARTING, ConnectorStatus.AUTHENTICATING, ConnectorStatus.FAILED),
+        telemetry.statuses);
   }
 
   @Test
   void mapsForbiddenResponseToAuthorizationWithoutLeakingResponseBody() {
     replaceResponse(403, "client-secret-is-secret payload replay customer-id pii");
+    RecordingLogger logger = new RecordingLogger();
     ClientCredentialsAuthProvider provider =
         new ClientCredentialsAuthProvider(
-            "http://localhost:" + server.getAddress().getPort(), "client", "client-secret");
+            "http://localhost:" + server.getAddress().getPort(),
+            "client",
+            "client-secret",
+            HttpClient.newHttpClient(),
+            null,
+            logger.proxy());
 
     CompletionException failure =
         assertThrows(
@@ -201,6 +225,31 @@ class ClientCredentialsAuthProviderTest {
     assertFalse(authorization.toString().contains("replay"));
     assertFalse(authorization.toString().contains("customer-id"));
     assertFalse(authorization.toString().contains("pii"));
+    assertAuthenticationLog(logger, "AuthorizationException");
+  }
+
+  private static void assertAuthenticationLog(
+      RecordingLogger logger, String expectedExceptionCategory) {
+    assertEquals(1, logger.events().size());
+    RecordingLogger.LogEvent event = logger.events().getFirst();
+    assertEquals("ERROR", event.level());
+    assertEquals(
+        java.util.Map.of("exceptionCategory", expectedExceptionCategory), event.keyValues());
+    String diagnostic = event.toString();
+    assertFalse(diagnostic.contains("client-secret"));
+    assertFalse(diagnostic.contains("payload"));
+    assertFalse(diagnostic.contains("replay"));
+    assertFalse(diagnostic.contains("customer-id"));
+    assertFalse(diagnostic.contains("pii"));
+  }
+
+  private static final class RecordingTelemetry implements SalesforcePubSubTelemetry {
+    private final java.util.List<ConnectorStatus> statuses = new java.util.ArrayList<>();
+
+    @Override
+    public void connectionState(String connectionName, ConnectorStatus status) {
+      statuses.add(status);
+    }
   }
 
   @Test

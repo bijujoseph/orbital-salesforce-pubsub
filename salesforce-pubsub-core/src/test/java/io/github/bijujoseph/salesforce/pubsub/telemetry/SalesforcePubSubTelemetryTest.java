@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
@@ -77,7 +78,17 @@ class SalesforcePubSubTelemetryTest {
     telemetry.schemaCacheHit();
     telemetry.schemaCacheMiss();
 
-    assertEquals(11, telemetry.metrics.size());
+    assertEquals(25, telemetry.metrics.size());
+    assertOneHot(
+        telemetry,
+        SalesforcePubSubMetric.CONNECTION_STATE,
+        ConnectorStatus.CONNECTED,
+        ConnectorStatus.values().length);
+    assertOneHot(
+        telemetry,
+        SalesforcePubSubMetric.SUBSCRIPTION_STATE,
+        ConnectorStatus.SUBSCRIBED,
+        ConnectorStatus.values().length);
     telemetry.metrics.forEach(
         observed -> {
           assertTrue(ALLOWED_LABELS.containsAll(observed.labels().asMap().keySet()));
@@ -108,26 +119,57 @@ class SalesforcePubSubTelemetryTest {
     NoOpSalesforcePubSubTelemetry telemetry = NoOpSalesforcePubSubTelemetry.INSTANCE;
     assertSame(telemetry, NoOpSalesforcePubSubTelemetry.INSTANCE);
     ExecutorService executor = Executors.newFixedThreadPool(8);
+    List<Future<?>> invocations = new ArrayList<>();
     try {
       for (int index = 0; index < 1_000; index++) {
-        executor.submit(
-            () -> {
-              telemetry.connected("connection");
-              telemetry.subscribed("connection", "/event/Test__e", "consumer");
-              telemetry.eventReceived("/event/Test__e", "event");
-              telemetry.reconnecting("/event/Test__e", new RuntimeException("secret"));
-              telemetry.published("/event/Test__e", "correlation");
-              telemetry.schemaCacheHit();
-              telemetry.schemaCacheMiss();
-              telemetry.schemaCacheLoadFailure();
-              telemetry.schemaCacheEviction();
-            });
+        invocations.add(
+            executor.submit(
+                () -> {
+                  telemetry.connected("connection");
+                  telemetry.subscribed("connection", "/event/Test__e", "consumer");
+                  telemetry.eventReceived("/event/Test__e", "event");
+                  telemetry.reconnecting("/event/Test__e", new RuntimeException("secret"));
+                  telemetry.published("/event/Test__e", "correlation");
+                  telemetry.schemaCacheHit();
+                  telemetry.schemaCacheMiss();
+                  telemetry.schemaCacheLoadFailure();
+                  telemetry.schemaCacheEviction();
+                }));
+      }
+      for (Future<?> invocation : invocations) {
+        invocation.get(5, TimeUnit.SECONDS);
       }
     } finally {
       executor.shutdown();
       assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
     }
     assertDoesNotThrow(() -> new NoOpSalesforcePubSubTelemetry().schemaCacheHit());
+  }
+
+  private static void assertOneHot(
+      RecordingTelemetry telemetry,
+      SalesforcePubSubMetric metric,
+      ConnectorStatus expected,
+      int expectedSeries) {
+    List<ObservedMetric> observations =
+        telemetry.metrics.stream().filter(observed -> observed.metric() == metric).toList();
+    assertEquals(expectedSeries, observations.size());
+    assertEquals(1, observations.stream().filter(observed -> observed.value() == 1).count());
+    assertEquals(
+        expected.name(),
+        observations.stream()
+            .filter(observed -> observed.value() == 1)
+            .findFirst()
+            .orElseThrow()
+            .labels()
+            .outcome());
+    assertEquals(
+        Set.of(ConnectorStatus.values()).stream()
+            .map(Enum::name)
+            .collect(java.util.stream.Collectors.toSet()),
+        observations.stream()
+            .map(observed -> observed.labels().outcome())
+            .collect(java.util.stream.Collectors.toSet()));
   }
 
   private record ObservedMetric(SalesforcePubSubMetric metric, double value, MetricLabels labels) {}
