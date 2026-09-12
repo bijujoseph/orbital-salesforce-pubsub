@@ -22,6 +22,11 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorStatus;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.SalesforcePubSubTelemetry;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -78,6 +83,21 @@ class UserSuppliedAuthProviderTest {
                     .toCompletableFuture()
                     .join());
     assertInstanceOf(AuthenticationException.class, failure.getCause());
+  }
+
+  @Test
+  void publishesAuthenticationHealthAtExistingSessionBoundary() {
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    UserSuppliedAuthProvider provider =
+        new UserSuppliedAuthProvider(
+            new SalesforceSession("token", "https://instance.example", null, null), health);
+
+    provider.authenticate().toCompletableFuture().join();
+
+    assertEquals(ConnectorStatus.AUTHENTICATING, health.status());
+    assertEquals(
+        List.of(ConnectorStatus.STARTING, ConnectorStatus.AUTHENTICATING), telemetry.statuses);
   }
 
   @Test
@@ -152,5 +172,14 @@ class UserSuppliedAuthProviderTest {
     org.junit.jupiter.api.Assertions.assertFalse(text.contains("query-secret"));
     org.junit.jupiter.api.Assertions.assertFalse(text.contains("tenant-credential"));
     org.junit.jupiter.api.Assertions.assertFalse(text.contains("user-credential"));
+  }
+
+  private static final class RecordingTelemetry implements SalesforcePubSubTelemetry {
+    private final List<ConnectorStatus> statuses = new ArrayList<>();
+
+    @Override
+    public void connectionState(String connectionName, ConnectorStatus status) {
+      statuses.add(status);
+    }
   }
 }

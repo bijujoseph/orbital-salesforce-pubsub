@@ -114,10 +114,10 @@
      starts a new 10-minute window for the new head. Polls, retries, restarts,
      handoffs, and context compaction do not reset it. If it expires with no
      review round active and no new reviewed push, stop and report exact state.
-   - **Hard cap:** the initial read also starts a 60-minute cap for the complete
+   - **Hard cap:** the initial read also starts a 120-minute cap for the complete
      review/fix/publish exchange. Nothing resets it. At expiry, stop and report
      exact head, CI, review, approval, mergeability, and merge state. Only an
-     explicit later request to resume starts new 60- and 10-minute clocks.
+     explicit later request to resume starts new 120- and 10-minute clocks.
    - Agents never merge. GitHub/Copilot may approve and auto-merge externally.
 6. `final_reviewer` evaluates milestone or release readiness across completed
    tasks.

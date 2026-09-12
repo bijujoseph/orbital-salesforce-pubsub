@@ -17,6 +17,9 @@
 package io.github.bijujoseph.salesforce.pubsub.auth;
 
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorHealth;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.ConnectorStatus;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -35,6 +38,8 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Acquires Salesforce sessions with the OAuth 2.0 client-credentials grant.
@@ -45,6 +50,9 @@ import java.util.concurrent.Flow;
  */
 public final class ClientCredentialsAuthProvider implements SalesforceAuthProvider {
 
+  private static final Logger DEFAULT_LOGGER =
+      LoggerFactory.getLogger(ClientCredentialsAuthProvider.class);
+
   private static final String TOKEN_PATH = "/services/oauth2/token";
   private static final Duration AUTH_REQUEST_TIMEOUT = Duration.ofSeconds(30);
   private static final int MAX_AUTH_RESPONSE_BYTES = 64 * 1024;
@@ -54,6 +62,8 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
   private final String clientId;
   private final String clientSecret;
   private final HttpClient httpClient;
+  private final ConnectorHealth health;
+  private final Logger logger;
   private final Object requestLock = new Object();
   private CompletableFuture<SalesforceSession> inFlight;
 
@@ -72,6 +82,44 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
 
   public ClientCredentialsAuthProvider(
       URI loginUrl, String clientId, String clientSecret, HttpClient httpClient) {
+    this(loginUrl, clientId, clientSecret, httpClient, null, DEFAULT_LOGGER);
+  }
+
+  public ClientCredentialsAuthProvider(
+      String loginUrl,
+      String clientId,
+      String clientSecret,
+      HttpClient httpClient,
+      ConnectorHealth health) {
+    this(toUri(loginUrl), clientId, clientSecret, httpClient, health, DEFAULT_LOGGER);
+  }
+
+  public ClientCredentialsAuthProvider(
+      URI loginUrl,
+      String clientId,
+      String clientSecret,
+      HttpClient httpClient,
+      ConnectorHealth health) {
+    this(loginUrl, clientId, clientSecret, httpClient, health, DEFAULT_LOGGER);
+  }
+
+  ClientCredentialsAuthProvider(
+      String loginUrl,
+      String clientId,
+      String clientSecret,
+      HttpClient httpClient,
+      ConnectorHealth health,
+      Logger logger) {
+    this(toUri(loginUrl), clientId, clientSecret, httpClient, health, logger);
+  }
+
+  private ClientCredentialsAuthProvider(
+      URI loginUrl,
+      String clientId,
+      String clientSecret,
+      HttpClient httpClient,
+      ConnectorHealth health,
+      Logger logger) {
     this.tokenEndpoint = tokenEndpoint(loginUrl);
     this.clientId = requireNonBlank(clientId, "client ID");
     this.clientSecret = requireNonBlankExact(clientSecret, "client secret");
@@ -79,19 +127,25 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       throw new AuthenticationException("Missing HTTP client");
     }
     this.httpClient = httpClient;
+    this.health = health;
+    this.logger = Objects.requireNonNull(logger, "logger");
   }
 
   @Override
   public CompletionStage<SalesforceSession> authenticate() {
     synchronized (requestLock) {
       if (inFlight != null && !inFlight.isDone()) {
+        logger.atDebug().log("Salesforce authentication joined in-flight request");
         return inFlight;
       }
+
+      transitionHealth(ConnectorStatus.AUTHENTICATING);
 
       CompletableFuture<SalesforceSession> request;
       try {
         request = sendTokenRequest();
       } catch (RuntimeException exception) {
+        logAuthenticationFailure(AuthenticationException.class);
         return failedFuture(
             new AuthenticationException("Salesforce authentication request failed"));
       }
@@ -139,8 +193,11 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
             return;
           }
           try {
-            result.complete(mapResponse(response, failure));
+            SalesforceSession mapped = mapResponse(response, failure);
+            logger.atInfo().log("Salesforce authentication completed");
+            result.complete(mapped);
           } catch (RuntimeException exception) {
+            logAuthenticationFailure(exception.getClass());
             result.completeExceptionally(exception);
           }
         });
@@ -171,6 +228,9 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       throw new AuthenticationException("Salesforce authentication response was invalid");
     }
     if (statusCode < 200 || statusCode >= 300) {
+      if (statusCode == 403) {
+        throw new AuthorizationException("Salesforce authentication endpoint denied authorization");
+      }
       throw new AuthenticationException(
           "Salesforce authentication request failed with an unsuccessful response");
     }
@@ -214,6 +274,20 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       current = current.getCause();
     }
     return false;
+  }
+
+  private void logAuthenticationFailure(Class<?> failureType) {
+    logger
+        .atError()
+        .addKeyValue("exceptionCategory", failureType.getSimpleName())
+        .log("Salesforce authentication failed");
+    transitionHealth(ConnectorStatus.FAILED);
+  }
+
+  private void transitionHealth(ConnectorStatus status) {
+    if (health != null) {
+      health.transitionTo(status);
+    }
   }
 
   private static final class BoundedStringBodySubscriber
