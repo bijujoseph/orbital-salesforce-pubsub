@@ -103,9 +103,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
 
   @Override
   public String toString() {
-    return "ClientCredentialsAuthProvider[tokenEndpoint="
-        + tokenEndpoint
-        + ", clientId=<redacted>]";
+    return "ClientCredentialsAuthProvider[tokenEndpoint=<redacted>, clientId=<redacted>]";
   }
 
   private CompletableFuture<SalesforceSession> sendTokenRequest() {

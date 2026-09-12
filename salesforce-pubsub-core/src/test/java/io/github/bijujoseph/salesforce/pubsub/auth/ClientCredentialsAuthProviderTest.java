@@ -173,7 +173,7 @@ class ClientCredentialsAuthProviderTest {
         AuthenticationException.class,
         () -> new ClientCredentialsAuthProvider("http://example.com", "client", "secret"));
     assertEquals(
-        "ClientCredentialsAuthProvider[tokenEndpoint=https://example.com/services/oauth2/token, clientId=<redacted>]",
+        "ClientCredentialsAuthProvider[tokenEndpoint=<redacted>, clientId=<redacted>]",
         new ClientCredentialsAuthProvider("https://example.com", "client", "secret").toString());
     assertThrows(
         AuthenticationException.class,
@@ -217,16 +217,17 @@ class ClientCredentialsAuthProviderTest {
         new ClientCredentialsAuthProvider(
             "http://diagnostic-user:diagnostic-password@localhost:"
                 + server.getAddress().getPort()
-                + "/login?client_secret=diagnostic-query-secret",
+                + "/path-secret/login?client_secret=diagnostic-query-secret",
             "client",
             "secret");
     String diagnostics = provider.toString();
     assertFalse(diagnostics.contains("diagnostic-user"));
     assertFalse(diagnostics.contains("diagnostic-password"));
     assertFalse(diagnostics.contains("diagnostic-query-secret"));
+    assertFalse(diagnostics.contains("path-secret"));
     assertEquals(
-        "http://localhost:" + server.getAddress().getPort() + "/login/services/oauth2/token",
-        diagnostics.substring(diagnostics.indexOf("http://"), diagnostics.indexOf(", clientId=")));
+        "ClientCredentialsAuthProvider[tokenEndpoint=<redacted>, clientId=<redacted>]",
+        diagnostics);
   }
 
   @Test
@@ -488,29 +489,35 @@ class ClientCredentialsAuthProviderTest {
 
   @Test
   void acceptsEndpointPathVariantsAndEmptyResponseAsTypedFailure() {
-    assertEquals(
-        "ClientCredentialsAuthProvider[tokenEndpoint=http://localhost:"
-            + server.getAddress().getPort()
-            + "/services/oauth2/token, clientId=<redacted>]",
-        new ClientCredentialsAuthProvider(
-                "http://localhost:" + server.getAddress().getPort() + "/", "client", "secret")
-            .toString());
-    assertEquals(
-        "ClientCredentialsAuthProvider[tokenEndpoint=http://localhost:"
-            + server.getAddress().getPort()
-            + "/base/services/oauth2/token, clientId=<redacted>]",
-        new ClientCredentialsAuthProvider(
-                "http://localhost:" + server.getAddress().getPort() + "/base/", "client", "secret")
-            .toString());
-    assertEquals(
-        "ClientCredentialsAuthProvider[tokenEndpoint=http://localhost:"
-            + server.getAddress().getPort()
-            + "/services/oauth2/token, clientId=<redacted>]",
-        new ClientCredentialsAuthProvider(
-                "http://localhost:" + server.getAddress().getPort() + "/services/oauth2/token/",
-                "client",
-                "secret")
-            .toString());
+    new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort() + "/", "client", "secret")
+        .authenticate()
+        .toCompletableFuture()
+        .join();
+    AtomicInteger baseRequestCount = new AtomicInteger();
+    server.createContext(
+        "/base/services/oauth2/token",
+        exchange -> {
+          baseRequestCount.incrementAndGet();
+          respond(
+              exchange,
+              200,
+              "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\"}");
+        });
+    new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort() + "/base/", "client", "secret")
+        .authenticate()
+        .toCompletableFuture()
+        .join();
+    new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort() + "/services/oauth2/token/",
+            "client",
+            "secret")
+        .authenticate()
+        .toCompletableFuture()
+        .join();
+    assertEquals(2, requestCount.get());
+    assertEquals(1, baseRequestCount.get());
 
     replaceResponse(200, "");
     ClientCredentialsAuthProvider emptyResponse =

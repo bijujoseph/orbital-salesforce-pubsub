@@ -65,8 +65,12 @@ public final class UserSuppliedAuthProvider implements SalesforceAuthProvider {
     return authenticate();
   }
 
-  /** Replaces the current session as one immutable, atomic value. */
+  /** Replaces the current session as one immutable, atomic value in fixed-session mode. */
   public void updateSession(SalesforceSession updatedSession) {
+    if (sessionSupplier != null) {
+      throw new AuthenticationException(
+          "Supplier-backed sessions must be updated through their supplier");
+    }
     SalesforceSession replacement = requireSession(updatedSession);
     synchronized (sessionLock) {
       session.set(replacement);
