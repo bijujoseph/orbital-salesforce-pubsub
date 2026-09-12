@@ -59,6 +59,18 @@ class SalesforcePubSubTelemetryTest {
       assertFalse(metric.metricName().contains("checkpoint_age"));
       assertFalse(metric.metricName().contains("processing_duration"));
     }
+    assertEquals(
+        Set.of(
+            SalesforcePubSubMetric.CONNECTION_STATE,
+            SalesforcePubSubMetric.SUBSCRIPTION_STATE,
+            SalesforcePubSubMetric.IN_FLIGHT_EVENTS),
+        java.util.Arrays.stream(SalesforcePubSubMetric.values())
+            .filter(metric -> metric.kind() == SalesforcePubSubMetric.Kind.GAUGE)
+            .collect(java.util.stream.Collectors.toUnmodifiableSet()));
+    assertTrue(
+        java.util.Arrays.stream(SalesforcePubSubMetric.values())
+            .filter(metric -> metric.kind() == SalesforcePubSubMetric.Kind.COUNTER)
+            .allMatch(metric -> metric.metricName().endsWith("_total")));
   }
 
   @Test
@@ -144,6 +156,41 @@ class SalesforcePubSubTelemetryTest {
       assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
     }
     assertDoesNotThrow(() -> new NoOpSalesforcePubSubTelemetry().schemaCacheHit());
+    assertDoesNotThrow(
+        () -> {
+          telemetry.connected(null);
+          telemetry.subscribed(null, null, null);
+          telemetry.eventReceived(null, null);
+          telemetry.eventEmitted(null);
+          telemetry.reconnecting(null, null);
+          telemetry.decodeFailure(null, null);
+          telemetry.published(null, null);
+          telemetry.publishFailure(null, null);
+          telemetry.connectionState(null, null);
+          telemetry.subscriptionState(null, null, null);
+          telemetry.inFlightEvents(null, Long.MAX_VALUE);
+          telemetry.schemaCacheHit();
+          telemetry.schemaCacheMiss();
+          telemetry.schemaCacheLoadFailure();
+          telemetry.schemaCacheEviction();
+          telemetry.metric(null, Double.NaN, null);
+        });
+  }
+
+  @Test
+  void nullFailuresUseOnlyTheLowCardinalityUnknownExceptionLabel() {
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+
+    telemetry.reconnecting("/event/Test__e", null);
+    telemetry.decodeFailure("/event/Test__e", null);
+    telemetry.publishFailure("/event/Test__e", null);
+
+    assertEquals(3, telemetry.metrics.size());
+    telemetry.metrics.forEach(
+        observed -> {
+          assertEquals("Unknown", observed.labels().exceptionType());
+          assertEquals(Set.of("topic", "exceptionType"), observed.labels().asMap().keySet());
+        });
   }
 
   private static void assertOneHot(

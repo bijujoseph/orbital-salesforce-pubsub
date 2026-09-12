@@ -45,11 +45,17 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -132,6 +138,41 @@ class ClientCredentialsAuthProviderTest {
         "user-1",
         provider.refresh(session).toCompletableFuture().get(5, TimeUnit.SECONDS).userId());
     assertEquals(2, requestCount.get());
+  }
+
+  @Test
+  void concurrentRefreshCallsShareExactlyOneTokenRequest() throws Exception {
+    ControllableHttpClient httpClient = new ControllableHttpClient();
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider("http://localhost", "client", "secret", httpClient);
+    SalesforceSession current =
+        new SalesforceSession("current-token", "https://instance.example", "tenant", "user");
+    ExecutorService executor = Executors.newFixedThreadPool(8);
+    CountDownLatch start = new CountDownLatch(1);
+    List<Future<CompletionStage<SalesforceSession>>> calls = new ArrayList<>();
+    try {
+      for (int index = 0; index < 32; index++) {
+        calls.add(
+            executor.submit(
+                () -> {
+                  assertTrue(start.await(5, TimeUnit.SECONDS));
+                  return provider.refresh(current);
+                }));
+      }
+      start.countDown();
+      List<CompletionStage<SalesforceSession>> stages = new ArrayList<>();
+      for (Future<CompletionStage<SalesforceSession>> call : calls) {
+        stages.add(call.get(5, TimeUnit.SECONDS));
+      }
+
+      assertEquals(1, httpClient.attempts.get());
+      CompletionStage<SalesforceSession> shared = stages.getFirst();
+      stages.forEach(stage -> assertSame(shared, stage));
+      assertTrue(shared.toCompletableFuture().cancel(true));
+    } finally {
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
   }
 
   @Test
