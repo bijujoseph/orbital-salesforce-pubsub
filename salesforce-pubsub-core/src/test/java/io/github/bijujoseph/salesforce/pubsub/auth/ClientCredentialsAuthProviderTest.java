@@ -80,13 +80,38 @@ class ClientCredentialsAuthProviderTest {
 
   @Test
   void acquiresSessionAndCoalescesConcurrentRequests() throws Exception {
+    CountDownLatch requestStarted = new CountDownLatch(1);
+    CountDownLatch releaseResponse = new CountDownLatch(1);
+    server.removeContext("/services/oauth2/token");
+    server.createContext(
+        "/services/oauth2/token",
+        exchange -> {
+          requestCount.incrementAndGet();
+          requestStarted.countDown();
+          try {
+            assertTrue(releaseResponse.await(5, TimeUnit.SECONDS));
+          } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Test request interrupted", exception);
+          }
+          respond(
+              exchange,
+              200,
+              "{\"access_token\":\"access-secret\",\"instance_url\":\"https://instance.example\",\"id\":\"https://login.salesforce.com/id/tenant-1/user-1\"}");
+        });
     ClientCredentialsAuthProvider provider =
         new ClientCredentialsAuthProvider(
             "http://localhost:" + server.getAddress().getPort(), "client", "client-secret");
 
     var first = provider.authenticate();
-    var second = provider.authenticate();
-    assertSame(first, second);
+    try {
+      assertTrue(requestStarted.await(5, TimeUnit.SECONDS));
+      var second = provider.authenticate();
+      assertSame(first, second);
+      assertEquals(1, requestCount.get());
+    } finally {
+      releaseResponse.countDown();
+    }
     SalesforceSession session = first.toCompletableFuture().get(5, TimeUnit.SECONDS);
 
     assertEquals("access-secret", session.accessToken());
