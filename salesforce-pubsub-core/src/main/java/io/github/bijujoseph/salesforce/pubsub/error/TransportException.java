@@ -16,6 +16,8 @@
 
 package io.github.bijujoseph.salesforce.pubsub.error;
 
+import io.grpc.Status;
+
 /** Indicates a sanitized Salesforce Pub/Sub transport or protocol failure. */
 public final class TransportException extends SalesforcePubSubException {
 
@@ -23,12 +25,19 @@ public final class TransportException extends SalesforcePubSubException {
 
   private final String code;
 
-  public TransportException(String code) {
-    super("Salesforce Pub/Sub RPC failed [" + SafeExceptionContext.value(code) + "]");
-    this.code = SafeExceptionContext.value(code);
+  public TransportException(Status.Code code) {
+    super("Salesforce Pub/Sub RPC failed [" + requireCode(code).name() + "]");
+    this.code = code.name();
   }
 
   public String code() {
+    return code;
+  }
+
+  private static Status.Code requireCode(Status.Code code) {
+    if (code == null) {
+      throw new IllegalArgumentException("Missing transport status code");
+    }
     return code;
   }
 }

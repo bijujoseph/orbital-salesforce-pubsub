@@ -561,6 +561,16 @@ class PubSubApiTransportTest {
     assertEquals(0, telemetry.connected.get());
     assertEquals(1, telemetry.subscriptionStates.size());
     assertEquals(1, telemetry.subscriptions.size());
+
+    subscription.complete();
+    subscription.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+    assertEquals(1, telemetry.connected.get());
+    assertEquals(
+        new SubscriptionStateObservation(
+            "connection", "/event/Exact_Topic__e", ConnectorStatus.CONNECTED),
+        telemetry.subscriptionStates.getLast());
   }
 
   @Test
@@ -569,7 +579,7 @@ class PubSubApiTransportTest {
     ConnectorHealth health = new ConnectorHealth("connection", telemetry);
     assertTrue(health.transitionTo(ConnectorStatus.FAILED));
 
-    assertFalse(health.subscriptionSucceeded("/event/Late__e"));
+    assertFalse(health.subscriptionSucceeded(new Object(), "/event/Late__e"));
 
     assertEquals(ConnectorStatus.FAILED, health.status());
     assertTrue(telemetry.subscriptionStates.isEmpty());

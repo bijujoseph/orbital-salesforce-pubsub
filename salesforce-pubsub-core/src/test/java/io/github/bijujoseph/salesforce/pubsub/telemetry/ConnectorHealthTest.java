@@ -129,6 +129,39 @@ class ConnectorHealthTest {
   }
 
   @Test
+  void subscriptionAccountingKeepsSameTopicActiveUntilLastExitAndHonorsTerminalPriority() {
+    List<ConnectorStatus> topicStates = new ArrayList<>();
+    SalesforcePubSubTelemetry telemetry =
+        new SalesforcePubSubTelemetry() {
+          @Override
+          public void subscriptionState(
+              String connectionName, String topic, ConnectorStatus status) {
+            topicStates.add(status);
+          }
+        };
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    Object first = new Object();
+    Object second = new Object();
+
+    assertTrue(health.subscriptionSucceeded(first, "/event/Test__e"));
+    assertTrue(health.subscriptionSucceeded(second, "/event/Test__e"));
+    assertTrue(health.subscriptionEnded(first, ConnectorStatus.CONNECTED));
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+    assertEquals(ConnectorStatus.SUBSCRIBED, topicStates.getLast());
+    assertFalse(health.subscriptionEnded(first, ConnectorStatus.CONNECTED));
+
+    assertTrue(health.subscriptionEnded(second, ConnectorStatus.CONNECTED));
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+    assertEquals(ConnectorStatus.CONNECTED, topicStates.getLast());
+
+    Object terminal = new Object();
+    assertTrue(health.subscriptionSucceeded(terminal, "/event/Terminal__e"));
+    assertTrue(health.subscriptionEnded(terminal, ConnectorStatus.FAILED));
+    assertEquals(ConnectorStatus.FAILED, health.status());
+    assertFalse(health.subscriptionSucceeded(new Object(), "/event/Late__e"));
+  }
+
+  @Test
   void concurrentTransitionsPublishInStateOrderWithoutStaleTelemetry() throws Exception {
     CountDownLatch authenticatingPublished = new CountDownLatch(1);
     CountDownLatch releaseAuthentication = new CountDownLatch(1);

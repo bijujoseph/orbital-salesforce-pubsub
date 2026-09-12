@@ -17,10 +17,13 @@
 package io.github.bijujoseph.salesforce.pubsub.error;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.grpc.Status;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -40,7 +43,7 @@ class TypedExceptionTest {
             new EventEncodeException("encode failed"),
             new PublishException("publish failed"),
             new ReplayStoreException("replay store failed"),
-            new TransportException("UNAVAILABLE"));
+            new TransportException(Status.Code.UNAVAILABLE));
 
     assertEquals(11, failures.stream().map(Object::getClass).distinct().count());
     failures.forEach(
@@ -78,10 +81,15 @@ class TypedExceptionTest {
 
   @Test
   void transportFailureCarriesOnlyStatusCode() {
-    TransportException failure = new TransportException("INTERNAL\r\nremote payload");
+    TransportException failure = new TransportException(Status.Code.INTERNAL);
 
-    assertEquals("INTERNAL__remote payload", failure.code());
-    assertEquals("Salesforce Pub/Sub RPC failed [INTERNAL__remote payload]", failure.getMessage());
+    assertEquals("INTERNAL", failure.code());
+    assertEquals("Salesforce Pub/Sub RPC failed [INTERNAL]", failure.getMessage());
     assertNull(failure.getCause());
+    IllegalArgumentException missing =
+        assertThrows(IllegalArgumentException.class, () -> new TransportException(null));
+    assertFalse(missing.getMessage().contains("payload"));
+    assertThrows(
+        NoSuchMethodException.class, () -> TransportException.class.getConstructor(String.class));
   }
 }

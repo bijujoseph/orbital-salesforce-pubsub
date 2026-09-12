@@ -16,6 +16,8 @@
 
 package io.github.bijujoseph.salesforce.pubsub.telemetry;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -29,6 +31,7 @@ public final class ConnectorHealth {
   private final String connectionName;
   private final SalesforcePubSubTelemetry telemetry;
   private final Logger logger;
+  private final Map<Object, String> activeSubscriptions = new HashMap<>();
   private final AtomicReference<ConnectorStatus> status =
       new AtomicReference<>(ConnectorStatus.STARTING);
 
@@ -91,14 +94,45 @@ public final class ConnectorHealth {
   }
 
   /** Publishes the successful establishment of one subscription. */
-  public synchronized boolean subscriptionSucceeded(String topic) {
-    boolean transitioned = transitionTo(ConnectorStatus.SUBSCRIBED);
-    if (!transitioned && status.get() != ConnectorStatus.SUBSCRIBED) {
+  public synchronized boolean subscriptionSucceeded(Object subscription, String topic) {
+    Objects.requireNonNull(subscription, "subscription");
+    if (status.get().terminal() || activeSubscriptions.putIfAbsent(subscription, topic) != null) {
       return false;
     }
+    boolean transitioned = transitionTo(ConnectorStatus.SUBSCRIBED);
     publishTelemetry(
         () -> telemetry.subscriptionState(connectionName, topic, ConnectorStatus.SUBSCRIBED));
     publishTelemetry(() -> telemetry.subscribed(connectionName, topic, null));
+    return transitioned || status.get() == ConnectorStatus.SUBSCRIBED;
+  }
+
+  /** Publishes one subscription exit and restores aggregate health when the last stream ends. */
+  public synchronized boolean subscriptionEnded(Object subscription, ConnectorStatus exitStatus) {
+    Objects.requireNonNull(subscription, "subscription");
+    Objects.requireNonNull(exitStatus, "exit status");
+    String activeTopic = activeSubscriptions.remove(subscription);
+    if (activeTopic == null) {
+      if (exitStatus == ConnectorStatus.FAILED || exitStatus == ConnectorStatus.DEGRADED) {
+        transitionTo(exitStatus);
+      }
+      return false;
+    }
+    ConnectorStatus current = status.get();
+    ConnectorStatus effectiveExit = current.terminal() ? current : exitStatus;
+    long sameTopicRemaining =
+        activeSubscriptions.values().stream().filter(activeTopic::equals).count();
+    ConnectorStatus topicStatus =
+        sameTopicRemaining > 0 && !effectiveExit.terminal()
+            ? ConnectorStatus.SUBSCRIBED
+            : effectiveExit;
+    publishTelemetry(() -> telemetry.subscriptionState(connectionName, activeTopic, topicStatus));
+    if (effectiveExit.terminal()) {
+      transitionTo(effectiveExit);
+    } else if (activeSubscriptions.isEmpty()) {
+      transitionTo(exitStatus);
+    } else if (status.get() != ConnectorStatus.SUBSCRIBED) {
+      transitionTo(ConnectorStatus.SUBSCRIBED);
+    }
     return true;
   }
 
