@@ -1,29 +1,29 @@
 name: Copilot review labels
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 on:
-  pull_request:
+  pull_request_target:
     types: [review_requested]
-  pull_request_review:
-    types: [submitted]
 permissions:
   pull-requests: write
 jobs:
   label:
+    if: contains(github.event.requested_reviewer.login, 'copilot')
     runs-on: ubuntu-latest
-    env:
-      PR_URL: ${{ github.event.pull_request.html_url }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Copilot started reviewing
-        if: contains(github.event.requested_reviewer.login, 'copilot')
-        run: gh pr edit "$PR_URL" --add-label "copilot-reviewing"
+      - run: |
+          set -euo pipefail
 
-      - name: Copilot approved
-        if: contains(github.event.review.user.login, 'copilot') && github.event.review.state == 'approved'
-        run: gh pr edit "$PR_URL" --remove-label "copilot-reviewing" --add-label "copilot-approved"
+          current_labels=$(gh pr view "$PR_URL" --json labels --jq '[.labels[].name] | join(",")')
+          args=(--add-label "copilot-reviewing")
 
-      - name: Copilot did not approve
-        if: contains(github.event.review.user.login, 'copilot') && github.event.review.state != 'approved'
-        run: gh pr edit "$PR_URL" --remove-label "copilot-reviewing" --add-label "copilot-changes-requested"
+          if [[ ",$current_labels," == *",copilot-approved,"* ]]; then
+            args+=(--remove-label "copilot-approved")
+          fi
+
+          if [[ ",$current_labels," == *",copilot-changes-requested,"* ]]; then
+            args+=(--remove-label "copilot-changes-requested")
+          fi
+
+          gh pr edit "$PR_URL" "${args[@]}"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
