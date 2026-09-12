@@ -32,10 +32,11 @@ final class ReplayStartSelector {
       return replayId;
     }
 
+    SubscriptionStart preset = requirePreset(request.start());
     return replayStore
         .load(request.connectionName(), request.topic(), request.consumerName())
         .<SubscriptionStart>map(ReplayId::new)
-        .orElseGet(() -> requirePreset(request.start()));
+        .orElse(preset);
   }
 
   private static SubscriptionStart requirePreset(SubscriptionStart start) {

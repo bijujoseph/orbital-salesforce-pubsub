@@ -18,7 +18,9 @@ package io.github.bijujoseph.salesforce.pubsub.subscription;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -26,6 +28,7 @@ import io.github.bijujoseph.salesforce.pubsub.config.FlowControlOptions;
 import io.github.bijujoseph.salesforce.pubsub.replay.InvalidReplayPolicy;
 import io.github.bijujoseph.salesforce.pubsub.replay.ReplayStore;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -92,13 +95,32 @@ class ReplayStartSelectorTest {
   }
 
   @Test
-  void rejectsMissingSelectorInputsAndMissingStart() {
+  void rejectsMissingSelectorInputs() {
     RecordingReplayStore store = new RecordingReplayStore(null);
     assertThrows(NullPointerException.class, () -> ReplayStartSelector.select(null, store));
     assertThrows(
         NullPointerException.class, () -> ReplayStartSelector.select(request(new Latest()), null));
-    assertThrows(
-        IllegalArgumentException.class, () -> ReplayStartSelector.select(request(null), store));
+  }
+
+  @ParameterizedTest(name = "null start is rejected before consulting {0}")
+  @MethodSource("invalidStartStoreScenarios")
+  void rejectsMissingStartBeforeLoadingReplayState(String description, byte[] stored) {
+    RecordingReplayStore store = new RecordingReplayStore(stored);
+
+    IllegalArgumentException failure =
+        assertThrows(
+            IllegalArgumentException.class, () -> ReplayStartSelector.select(request(null), store));
+
+    assertEquals(0, store.loads.size());
+    String message = failure.getMessage();
+    assertNotNull(message);
+    assertFalse(message.isBlank());
+    assertFalse(message.contains(CONNECTION));
+    assertFalse(message.contains(TOPIC));
+    assertFalse(message.contains(CONSUMER));
+    if (stored != null) {
+      assertFalse(message.contains(Arrays.toString(stored)));
+    }
   }
 
   private static Stream<Arguments> precedenceScenarios() {
@@ -137,6 +159,12 @@ class ReplayStartSelectorTest {
             "latest applies without checkpoint", new Latest(), null, Latest.class, null, 1),
         Arguments.of(
             "earliest applies without checkpoint", new Earliest(), null, Earliest.class, null, 1));
+  }
+
+  private static Stream<Arguments> invalidStartStoreScenarios() {
+    return Stream.of(
+        Arguments.of("empty store", null),
+        Arguments.of("store containing a checkpoint", new byte[] {0x01, (byte) 0xff}));
   }
 
   private static SubscribeRequest request(SubscriptionStart start) {
