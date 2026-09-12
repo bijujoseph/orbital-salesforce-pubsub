@@ -2,6 +2,7 @@
 
 ## Pull Request Reviews
 
+- Consult `AGENTS.md` before reviewing and follow its repository-wide requirements; if these instructions conflict, `AGENTS.md` takes precedence.
 - Inspect the complete pull request diff and every changed file before submitting the review.
 - Report every distinct actionable finding discovered during that pass; do not intentionally defer a known finding to a later review.
 - Consult the linked issue, Project work-item details, and explicit acceptance criteria when determining scope and expected behavior. Flag in-scope correctness, security, workflow, and regression-test gaps, but do not propose unrelated refactors.
