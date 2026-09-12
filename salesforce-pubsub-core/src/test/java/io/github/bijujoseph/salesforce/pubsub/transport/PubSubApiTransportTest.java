@@ -74,6 +74,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -928,6 +929,150 @@ class PubSubApiTransportTest {
     assertTrue(dependentEntered.await(5, TimeUnit.SECONDS));
     releaseDependent.countDown();
     awaitCancellation(response);
+  }
+
+  @Test
+  void explicitUnaryCancellationDoesNotRunOrWaitForCallerDependents() throws Exception {
+    DelayedService service = new DelayedService();
+    restartServer(service);
+    CompletableFuture<TopicMetadata> response = transport.getTopic("blocking-cancel-dependent");
+    assertTrue(service.started.await(5, TimeUnit.SECONDS));
+    CountDownLatch dependentEntered = new CountDownLatch(1);
+    CountDownLatch releaseDependent = new CountDownLatch(1);
+    CountDownLatch dependentExited = new CountDownLatch(1);
+    AtomicReference<Thread> dependentThread = new AtomicReference<>();
+    response.whenComplete(
+        (ignored, failure) -> {
+          dependentThread.set(Thread.currentThread());
+          dependentEntered.countDown();
+          try {
+            await(releaseDependent);
+          } finally {
+            dependentExited.countDown();
+          }
+        });
+    Thread cancellingThread = Thread.currentThread();
+
+    try {
+      assertTimeout(Duration.ofSeconds(1), () -> assertTrue(response.cancel(true)));
+
+      assertTrue(response.isCancelled());
+      assertTrue(response.isDone());
+      assertTrue(response.isCompletedExceptionally());
+      assertEquals(java.util.concurrent.Future.State.CANCELLED, response.state());
+      assertThrows(CancellationException.class, response::join);
+      assertThrows(CancellationException.class, response::get);
+      assertThrows(CancellationException.class, () -> response.getNow(null));
+      assertTrue(service.unaryCancelled.await(5, TimeUnit.SECONDS));
+      assertTrue(dependentEntered.await(5, TimeUnit.SECONDS));
+      assertFalse(cancellingThread.equals(dependentThread.get()));
+      assertTrue(dependentThread.get().isVirtual());
+    } finally {
+      releaseDependent.countDown();
+      assertTrue(dependentExited.await(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void cancellationCompletionFallsBackFromRejectionWithoutStarvingOtherCancellations()
+      throws Exception {
+    java.util.concurrent.Executor rejectingExecutor =
+        task -> {
+          throw new RejectedExecutionException("expected test rejection");
+        };
+    PubSubApiTransport.CancellableRpcFuture<String> firstSource =
+        new PubSubApiTransport.CancellableRpcFuture<>(rejectingExecutor);
+    PubSubApiTransport.CancellableRpcFuture<String> secondSource =
+        new PubSubApiTransport.CancellableRpcFuture<>(rejectingExecutor);
+    CompletableFuture<String> first = firstSource.readOnlyStage();
+    CompletableFuture<String> second = secondSource.readOnlyStage();
+    CountDownLatch firstDependentEntered = new CountDownLatch(1);
+    CountDownLatch releaseFirstDependent = new CountDownLatch(1);
+    CountDownLatch firstDependentExited = new CountDownLatch(1);
+    CountDownLatch secondDependentEntered = new CountDownLatch(1);
+    first.whenComplete(
+        (ignored, failure) -> {
+          firstDependentEntered.countDown();
+          try {
+            await(releaseFirstDependent);
+          } finally {
+            firstDependentExited.countDown();
+          }
+        });
+    second.whenComplete((ignored, failure) -> secondDependentEntered.countDown());
+
+    try {
+      assertTimeout(Duration.ofSeconds(1), () -> assertTrue(first.cancel(false)));
+      assertTrue(first.isCancelled());
+      assertTrue(firstDependentEntered.await(5, TimeUnit.SECONDS));
+
+      assertTimeout(Duration.ofSeconds(1), () -> assertTrue(second.cancel(false)));
+      assertTrue(second.isCancelled());
+      assertTrue(secondDependentEntered.await(5, TimeUnit.SECONDS));
+    } finally {
+      releaseFirstDependent.countDown();
+      assertTrue(firstDependentExited.await(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void unaryCancellationOwnsStateAndCleanupExactlyOnce() {
+    PubSubApiTransport.CancellableRpcFuture<String> source =
+        new PubSubApiTransport.CancellableRpcFuture<>();
+    ThrowingCancelClientCall<String, String> call = new ThrowingCancelClientCall<>();
+    ThrowingClientRequestObserver<Object> stream =
+        new ThrowingClientRequestObserver<>(false, false, true);
+    PubSubApiTransport.UnaryResponseObserver<String, String> observer =
+        new PubSubApiTransport.UnaryResponseObserver<>(source, value -> value);
+    source.attachClientCall(call);
+    observer.beforeStart(stream);
+    CompletableFuture<String> response = source.readOnlyStage();
+
+    assertTimeout(Duration.ofSeconds(1), () -> assertTrue(response.cancel(true)));
+    assertFalse(response.cancel(true));
+
+    assertTrue(response.isCancelled());
+    assertEquals(1, call.cancels.get());
+    assertEquals(1, stream.cancels.get());
+    assertThrows(CancellationException.class, response::join);
+  }
+
+  @RepeatedTest(20)
+  void explicitUnaryCancellationAndTransportCloseHaveOneCancellationOutcome() throws Exception {
+    DelayedService service = new DelayedService();
+    restartServer(service);
+    CompletableFuture<TopicMetadata> response = transport.getTopic("cancel-close-race");
+    assertTrue(service.started.await(5, TimeUnit.SECONDS));
+    CountDownLatch race = new CountDownLatch(1);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<Boolean> explicitCancel =
+          executor.submit(
+              () -> {
+                await(race);
+                return response.cancel(true);
+              });
+      Future<?> transportClose =
+          executor.submit(
+              () -> {
+                await(race);
+                transport.close();
+              });
+
+      race.countDown();
+      explicitCancel.get(5, TimeUnit.SECONDS);
+      transportClose.get(5, TimeUnit.SECONDS);
+
+      assertTrue(response.isCancelled());
+      assertTrue(response.isDone());
+      assertTrue(service.unaryCancelled.await(5, TimeUnit.SECONDS));
+      assertFalse(response.cancel(true));
+      assertThrows(CancellationException.class, response::join);
+    } finally {
+      race.countDown();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
   }
 
   @Test

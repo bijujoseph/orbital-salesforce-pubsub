@@ -44,9 +44,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
@@ -64,6 +70,12 @@ import java.util.function.Supplier;
  * orchestration are deferred to OSP-035.
  */
 public final class PubSubApiTransport implements SalesforceEventTransport {
+
+  // A fresh virtual thread per cancellation avoids a shared queue or executor lifecycle.
+  private static final ThreadFactory CANCELLATION_COMPLETION_THREADS =
+      Thread.ofVirtual().name("salesforce-rpc-cancellation-", 0).factory();
+  private static final Executor CANCELLATION_COMPLETION_EXECUTOR =
+      task -> CANCELLATION_COMPLETION_THREADS.newThread(task).start();
 
   private final ManagedChannel channel;
   private final AtomicReference<SessionMetadata> session;
@@ -362,15 +374,29 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private final AtomicReference<ClientCall<?, ?>> clientCall = new AtomicReference<>();
     private final AtomicReference<RpcState> state = new AtomicReference<>(RpcState.RESERVED);
     private final Consumer<ActiveOperation> onTerminal;
+    private final Executor cancellationCompletionExecutor;
     private final AtomicBoolean terminalNotified = new AtomicBoolean();
 
     CancellableRpcFuture() {
-      this(ignored -> {});
+      this(ignored -> {}, CANCELLATION_COMPLETION_EXECUTOR);
       state.set(RpcState.ACTIVE);
     }
 
     private CancellableRpcFuture(Consumer<ActiveOperation> onTerminal) {
+      this(onTerminal, CANCELLATION_COMPLETION_EXECUTOR);
+    }
+
+    CancellableRpcFuture(Executor cancellationCompletionExecutor) {
+      this(ignored -> {}, cancellationCompletionExecutor);
+      state.set(RpcState.ACTIVE);
+    }
+
+    private CancellableRpcFuture(
+        Consumer<ActiveOperation> onTerminal, Executor cancellationCompletionExecutor) {
       this.onTerminal = onTerminal;
+      this.cancellationCompletionExecutor =
+          Objects.requireNonNull(
+              cancellationCompletionExecutor, "cancellation completion executor");
     }
 
     @Override
@@ -413,7 +439,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     public void closeFromTransport() {
       if (cancelState()) {
         cancelClientCall(clientCall.get());
-        CompletableFuture.runAsync(this::cancelCompletionFromTransport);
+        cancelCompletionFromTransport();
       }
     }
 
@@ -421,7 +447,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       return state.compareAndSet(RpcState.RESERVED, RpcState.ACTIVE);
     }
 
-    private CompletableFuture<ResponseT> readOnlyStage() {
+    CompletableFuture<ResponseT> readOnlyStage() {
       return new CancellableStage<>(this);
     }
 
@@ -484,6 +510,18 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       super.cancel(false);
     }
 
+    private void dispatchCancellationCompletion(Runnable task) {
+      try {
+        cancellationCompletionExecutor.execute(task);
+      } catch (RuntimeException rejected) {
+        CANCELLATION_COMPLETION_EXECUTOR.execute(task);
+      }
+    }
+
+    private boolean cancellationRequested() {
+      return state.get() == RpcState.CANCELLED;
+    }
+
     private boolean failInternal(Throwable failure) {
       if (!terminateState()) {
         return false;
@@ -528,7 +566,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
             if (failure == null) {
               super.complete(response);
             } else if (source.isCancelled()) {
-              super.cancel(false);
+              source.dispatchCancellationCompletion(() -> super.cancel(false));
             } else {
               super.completeExceptionally(failure);
             }
@@ -548,6 +586,51 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     @Override
     public boolean cancel(boolean mayInterruptIfRunning) {
       return source.cancel(mayInterruptIfRunning);
+    }
+
+    @Override
+    public boolean isCancelled() {
+      return source.cancellationRequested() || super.isCancelled();
+    }
+
+    @Override
+    public boolean isDone() {
+      return source.cancellationRequested() || super.isDone();
+    }
+
+    @Override
+    public boolean isCompletedExceptionally() {
+      return source.cancellationRequested() || super.isCompletedExceptionally();
+    }
+
+    @Override
+    public Future.State state() {
+      return source.cancellationRequested() ? Future.State.CANCELLED : super.state();
+    }
+
+    @Override
+    public ResponseT get() throws InterruptedException, ExecutionException {
+      throwIfCancellationRequested();
+      return super.get();
+    }
+
+    @Override
+    public ResponseT get(long timeout, TimeUnit unit)
+        throws InterruptedException, ExecutionException, TimeoutException {
+      throwIfCancellationRequested();
+      return super.get(timeout, unit);
+    }
+
+    @Override
+    public ResponseT join() {
+      throwIfCancellationRequested();
+      return super.join();
+    }
+
+    @Override
+    public ResponseT getNow(ResponseT valueIfAbsent) {
+      throwIfCancellationRequested();
+      return super.getNow(valueIfAbsent);
     }
 
     @Override
@@ -585,6 +668,12 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     private static UnsupportedOperationException readOnlyFailure() {
       return new UnsupportedOperationException("Salesforce RPC stage is read-only");
+    }
+
+    private void throwIfCancellationRequested() {
+      if (source.cancellationRequested()) {
+        throw new CancellationException();
+      }
     }
   }
 
