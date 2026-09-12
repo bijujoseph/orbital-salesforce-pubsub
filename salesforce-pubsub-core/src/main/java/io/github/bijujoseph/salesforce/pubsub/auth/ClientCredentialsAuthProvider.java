@@ -24,6 +24,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
@@ -142,7 +144,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
 
   private SalesforceSession mapResponse(HttpResponse<String> response, Throwable failure) {
     if (failure != null) {
-      if (hasOversizedResponseCause(failure)) {
+      if (hasInvalidResponseCause(failure)) {
         throw new AuthenticationException("Salesforce authentication response was invalid");
       }
       throw new AuthenticationException("Salesforce authentication request failed");
@@ -176,10 +178,10 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
     }
   }
 
-  private static boolean hasOversizedResponseCause(Throwable failure) {
+  private static boolean hasInvalidResponseCause(Throwable failure) {
     Throwable current = failure;
     while (current != null) {
-      if (current instanceof OversizedResponseException) {
+      if (current instanceof InvalidResponseException) {
         return true;
       }
       current = current.getCause();
@@ -214,7 +216,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
         int length = buffer.remaining();
         if (length > MAX_AUTH_RESPONSE_BYTES - bytes.size()) {
           subscription.cancel();
-          body.completeExceptionally(new OversizedResponseException());
+          body.completeExceptionally(new InvalidResponseException());
           return;
         }
         byte[] chunk = new byte[length];
@@ -231,12 +233,28 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
 
     @Override
     public void onComplete() {
-      body.complete(bytes.toString(StandardCharsets.UTF_8));
+      try {
+        body.complete(
+            StandardCharsets.UTF_8
+                .newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes.toByteArray()))
+                .toString());
+      } catch (CharacterCodingException exception) {
+        body.completeExceptionally(new InvalidResponseException(exception));
+      }
     }
   }
 
-  private static final class OversizedResponseException extends RuntimeException {
+  private static final class InvalidResponseException extends RuntimeException {
     private static final long serialVersionUID = 1L;
+
+    private InvalidResponseException() {}
+
+    private InvalidResponseException(Throwable cause) {
+      super(cause);
+    }
   }
 
   void clearInFlight(CompletableFuture<SalesforceSession> completedRequest) {
@@ -539,9 +557,13 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
     }
 
     private void skipWhitespace() {
-      while (position < json.length() && Character.isWhitespace(json.charAt(position))) {
+      while (position < json.length() && isJsonWhitespace(json.charAt(position))) {
         position++;
       }
+    }
+
+    private static boolean isJsonWhitespace(char value) {
+      return value == ' ' || value == '\t' || value == '\n' || value == '\r';
     }
 
     private void requireEnd() {

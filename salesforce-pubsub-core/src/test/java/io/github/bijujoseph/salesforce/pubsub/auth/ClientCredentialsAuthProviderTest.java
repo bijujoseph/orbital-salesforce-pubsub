@@ -458,6 +458,33 @@ class ClientCredentialsAuthProviderTest {
   }
 
   @Test
+  void rejectsNonJsonWhitespace() {
+    assertInvalidOAuthResponse(
+        "{\u001c\"access_token\":\"token\",\"instance_url\":\"https://instance.example\"}");
+  }
+
+  @Test
+  void rejectsMalformedUtf8WithoutExposingResponseBytes() {
+    server.removeContext("/services/oauth2/token");
+    server.createContext(
+        "/services/oauth2/token",
+        exchange -> respond(exchange, 200, new byte[] {(byte) 0xc3, 0x28}));
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client", "secret");
+
+    AuthenticationException failure =
+        assertInstanceOf(
+            AuthenticationException.class,
+            assertThrows(
+                    CompletionException.class,
+                    () -> provider.authenticate().toCompletableFuture().join())
+                .getCause());
+
+    assertEquals("Salesforce authentication response was invalid", failure.getMessage());
+  }
+
+  @Test
   void handlesNullFieldsAndIdentityValuesIndependently() throws Exception {
     replaceResponse(
         200,
@@ -579,7 +606,10 @@ class ClientCredentialsAuthProviderTest {
   }
 
   private static void respond(HttpExchange exchange, int status, String body) throws IOException {
-    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+    respond(exchange, status, body.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static void respond(HttpExchange exchange, int status, byte[] bytes) throws IOException {
     exchange.sendResponseHeaders(status, bytes.length);
     try (var output = exchange.getResponseBody()) {
       output.write(bytes);
