@@ -8,6 +8,7 @@ permissions:
   contents: write
   pull-requests: write
 
+
 jobs:
   enable:
     if: github.event.pull_request.draft == false
