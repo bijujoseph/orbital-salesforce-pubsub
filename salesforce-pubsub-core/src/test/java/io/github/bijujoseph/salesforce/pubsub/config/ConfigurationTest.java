@@ -48,6 +48,9 @@ class ConfigurationTest {
     assertThrows(ConfigurationException.class, () -> new FlowControlOptions(21, 2, 10, 20));
     assertThrows(ConfigurationException.class, () -> new FlowControlOptions(10, 20, 10, 20));
     assertThrows(ConfigurationException.class, () -> new FlowControlOptions(10, 2, 21, 20));
+    assertThrows(ConfigurationException.class, () -> new FlowControlOptions(10, 19, 20, 20));
+    FlowControlOptions boundary = new FlowControlOptions(10, 10, 10, 20);
+    assertEquals(boundary.maxInFlightEvents(), boundary.refillThreshold() + boundary.refillCount());
   }
 
   @Test

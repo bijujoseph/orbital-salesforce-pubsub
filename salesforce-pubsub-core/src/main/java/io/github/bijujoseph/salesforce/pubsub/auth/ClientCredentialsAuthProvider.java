@@ -181,6 +181,9 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
           "Salesforce login URL must use HTTPS or HTTP on localhost for testing");
     }
     String path = loginUrl.getPath();
+    while (path != null && path.length() > 1 && path.endsWith("/")) {
+      path = path.substring(0, path.length() - 1);
+    }
     if (path != null && path.endsWith(TOKEN_PATH)) {
       try {
         return new URI(
@@ -190,9 +193,6 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       }
     }
     String basePath = path == null || path.isBlank() || "/".equals(path) ? "" : path;
-    if (basePath.endsWith("/")) {
-      basePath = basePath.substring(0, basePath.length() - 1);
-    }
     try {
       return new URI(
           loginUrl.getScheme(),
@@ -399,7 +399,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       int start = position;
       consume('-');
       if (consume('0')) {
-        if (position < json.length() && Character.isDigit(json.charAt(position))) {
+        if (position < json.length() && isAsciiDigit(json.charAt(position))) {
           throw new IllegalArgumentException("Invalid JSON number");
         }
       } else {
@@ -423,12 +423,16 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
 
     private void requireDigits() {
       int start = position;
-      while (position < json.length() && Character.isDigit(json.charAt(position))) {
+      while (position < json.length() && isAsciiDigit(json.charAt(position))) {
         position++;
       }
       if (position == start) {
         throw new IllegalArgumentException("Invalid JSON number");
       }
+    }
+
+    private static boolean isAsciiDigit(char value) {
+      return value >= '0' && value <= '9';
     }
 
     private boolean consume(char expected) {

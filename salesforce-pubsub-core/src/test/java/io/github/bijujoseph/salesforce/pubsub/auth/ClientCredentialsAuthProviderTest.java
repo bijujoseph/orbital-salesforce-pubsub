@@ -423,6 +423,8 @@ class ClientCredentialsAuthProviderTest {
     assertInvalidOAuthResponse("{\"access_token\":\"unterminated}");
     assertInvalidOAuthResponse(
         "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\",\"invalid_number\":01}");
+    assertInvalidOAuthResponse(
+        "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\",\"invalid_number\":١}");
   }
 
   @Test
@@ -499,6 +501,15 @@ class ClientCredentialsAuthProviderTest {
             + "/base/services/oauth2/token, clientId=<redacted>]",
         new ClientCredentialsAuthProvider(
                 "http://localhost:" + server.getAddress().getPort() + "/base/", "client", "secret")
+            .toString());
+    assertEquals(
+        "ClientCredentialsAuthProvider[tokenEndpoint=http://localhost:"
+            + server.getAddress().getPort()
+            + "/services/oauth2/token, clientId=<redacted>]",
+        new ClientCredentialsAuthProvider(
+                "http://localhost:" + server.getAddress().getPort() + "/services/oauth2/token/",
+                "client",
+                "secret")
             .toString());
 
     replaceResponse(200, "");

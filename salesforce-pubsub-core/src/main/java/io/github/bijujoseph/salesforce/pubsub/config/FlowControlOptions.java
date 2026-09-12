@@ -44,6 +44,10 @@ public record FlowControlOptions(
     if (refillCount > maxInFlightEvents) {
       throw new ConfigurationException("refillCount cannot exceed maxInFlightEvents");
     }
+    if (refillThreshold > maxInFlightEvents - refillCount) {
+      throw new ConfigurationException(
+          "refillThreshold plus refillCount cannot exceed maxInFlightEvents");
+    }
   }
 
   public static FlowControlOptions defaults() {
