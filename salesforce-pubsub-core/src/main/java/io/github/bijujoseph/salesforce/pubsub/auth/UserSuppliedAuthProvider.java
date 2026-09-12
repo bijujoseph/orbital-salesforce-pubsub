@@ -67,7 +67,10 @@ public final class UserSuppliedAuthProvider implements SalesforceAuthProvider {
 
   /** Replaces the current session as one immutable, atomic value. */
   public void updateSession(SalesforceSession updatedSession) {
-    session.set(requireSession(updatedSession));
+    SalesforceSession replacement = requireSession(updatedSession);
+    synchronized (sessionLock) {
+      session.set(replacement);
+    }
   }
 
   /** Alias for integrations that refer to the operation as setting the current session. */

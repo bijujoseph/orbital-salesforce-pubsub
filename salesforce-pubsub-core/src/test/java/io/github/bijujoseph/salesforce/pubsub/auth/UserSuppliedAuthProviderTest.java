@@ -20,9 +20,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
@@ -52,6 +57,47 @@ class UserSuppliedAuthProviderTest {
     assertEquals("token-1", provider.authenticate().toCompletableFuture().join().accessToken());
     current.set(new SalesforceSession("token-2", "https://instance.example", "tenant", "user"));
     assertEquals("token-2", provider.refresh(null).toCompletableFuture().join().accessToken());
+  }
+
+  @Test
+  void callerUpdateIsSerializedAfterAnInProgressSupplierLoad() throws Exception {
+    SalesforceSession stale =
+        new SalesforceSession("stale", "https://instance.example", null, null);
+    SalesforceSession replacement =
+        new SalesforceSession("replacement", "https://instance.example", null, null);
+    CountDownLatch supplierStarted = new CountDownLatch(1);
+    CountDownLatch releaseSupplier = new CountDownLatch(1);
+    CountDownLatch updateStarted = new CountDownLatch(1);
+    UserSuppliedAuthProvider provider =
+        new UserSuppliedAuthProvider(
+            () -> {
+              supplierStarted.countDown();
+              try {
+                releaseSupplier.await(5, TimeUnit.SECONDS);
+              } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(exception);
+              }
+              return stale;
+            });
+
+    CompletableFuture<SalesforceSession> authentication =
+        CompletableFuture.supplyAsync(() -> provider.authenticate().toCompletableFuture().join());
+    assertTrue(supplierStarted.await(5, TimeUnit.SECONDS));
+    CompletableFuture<Void> update =
+        CompletableFuture.runAsync(
+            () -> {
+              updateStarted.countDown();
+              provider.updateSession(replacement);
+            });
+    try {
+      assertTrue(updateStarted.await(5, TimeUnit.SECONDS));
+      assertThrows(TimeoutException.class, () -> update.get(100, TimeUnit.MILLISECONDS));
+    } finally {
+      releaseSupplier.countDown();
+    }
+    assertSame(stale, authentication.get(5, TimeUnit.SECONDS));
+    update.get(5, TimeUnit.SECONDS);
   }
 
   @Test

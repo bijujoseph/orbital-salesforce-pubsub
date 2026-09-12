@@ -27,14 +27,26 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
 import java.io.IOException;
+import java.net.Authenticator;
+import java.net.CookieHandler;
 import java.net.InetSocketAddress;
+import java.net.ProxySelector;
 import java.net.ServerSocket;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -269,6 +281,21 @@ class ClientCredentialsAuthProviderTest {
   }
 
   @Test
+  void synchronousClientFailureReturnsSanitizedFailedStage() {
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider(
+            "http://localhost", "client", "secret", new SynchronouslyFailingHttpClient());
+
+    CompletionException failure =
+        assertThrows(
+            CompletionException.class, () -> provider.authenticate().toCompletableFuture().join());
+    AuthenticationException authenticationException =
+        assertInstanceOf(AuthenticationException.class, failure.getCause());
+    assertEquals("Salesforce authentication request failed", authenticationException.getMessage());
+    assertFalse(authenticationException.getMessage().contains("synchronous-client-secret"));
+  }
+
+  @Test
   void supportsEscapedJsonAndOptionalIdentityMetadata() throws Exception {
     replaceResponse(
         200,
@@ -303,6 +330,36 @@ class ClientCredentialsAuthProviderTest {
         new ClientCredentialsAuthProvider(
             "http://localhost:" + server.getAddress().getPort(), "client", "secret");
     assertEquals(null, provider.authenticate().toCompletableFuture().join().tenantId());
+  }
+
+  @Test
+  void rejectsNestedOrTrailingOAuthResponseContent() {
+    replaceResponse(
+        200,
+        "{\"access_token\":\"token\",\"payload\":{\"instance_url\":\"https://wrong-instance.example\"}}");
+    ClientCredentialsAuthProvider nestedFields =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client", "secret");
+    AuthenticationException nestedFailure =
+        assertInstanceOf(
+            AuthenticationException.class,
+            assertThrows(
+                    CompletionException.class,
+                    () -> nestedFields.authenticate().toCompletableFuture().join())
+                .getCause());
+    assertFalse(nestedFailure.getMessage().contains("wrong-instance.example"));
+
+    replaceResponse(
+        200, "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\"} trailing");
+    ClientCredentialsAuthProvider trailingContent =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client", "secret");
+    assertInstanceOf(
+        AuthenticationException.class,
+        assertThrows(
+                CompletionException.class,
+                () -> trailingContent.authenticate().toCompletableFuture().join())
+            .getCause());
   }
 
   @Test
@@ -403,6 +460,76 @@ class ClientCredentialsAuthProviderTest {
     exchange.sendResponseHeaders(status, bytes.length);
     try (var output = exchange.getResponseBody()) {
       output.write(bytes);
+    }
+  }
+
+  private static final class SynchronouslyFailingHttpClient extends HttpClient {
+    private final HttpClient delegate = HttpClient.newHttpClient();
+
+    @Override
+    public Optional<CookieHandler> cookieHandler() {
+      return delegate.cookieHandler();
+    }
+
+    @Override
+    public Optional<Duration> connectTimeout() {
+      return delegate.connectTimeout();
+    }
+
+    @Override
+    public Redirect followRedirects() {
+      return delegate.followRedirects();
+    }
+
+    @Override
+    public Optional<ProxySelector> proxy() {
+      return delegate.proxy();
+    }
+
+    @Override
+    public SSLContext sslContext() {
+      return delegate.sslContext();
+    }
+
+    @Override
+    public SSLParameters sslParameters() {
+      return delegate.sslParameters();
+    }
+
+    @Override
+    public Optional<Authenticator> authenticator() {
+      return delegate.authenticator();
+    }
+
+    @Override
+    public Version version() {
+      return delegate.version();
+    }
+
+    @Override
+    public Optional<Executor> executor() {
+      return delegate.executor();
+    }
+
+    @Override
+    public <T> HttpResponse<T> send(
+        HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler)
+        throws IOException, InterruptedException {
+      return delegate.send(request, responseBodyHandler);
+    }
+
+    @Override
+    public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+        HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
+      throw new IllegalArgumentException("synchronous-client-secret");
+    }
+
+    @Override
+    public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+        HttpRequest request,
+        HttpResponse.BodyHandler<T> responseBodyHandler,
+        HttpResponse.PushPromiseHandler<T> pushPromiseHandler) {
+      throw new IllegalArgumentException("synchronous-client-secret");
     }
   }
 }

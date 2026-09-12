@@ -23,10 +23,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Acquires Salesforce sessions with the OAuth 2.0 client-credentials grant.
@@ -38,8 +38,6 @@ import java.util.regex.Pattern;
 public final class ClientCredentialsAuthProvider implements SalesforceAuthProvider {
 
   private static final String TOKEN_PATH = "/services/oauth2/token";
-  private static final Pattern JSON_STRING_PATTERN =
-      Pattern.compile("\\\"([^\\\"]+)\\\"\\s*:\\s*(\\\"(?:\\\\.|[^\\\"\\\\])*\\\"|null)");
 
   private final URI tokenEndpoint;
   private final String clientId;
@@ -79,7 +77,13 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
         return inFlight;
       }
 
-      CompletableFuture<SalesforceSession> request = sendTokenRequest();
+      CompletableFuture<SalesforceSession> request;
+      try {
+        request = sendTokenRequest();
+      } catch (RuntimeException exception) {
+        return failedFuture(
+            new AuthenticationException("Salesforce authentication request failed"));
+      }
       inFlight = request;
       request.whenComplete((session, failure) -> clearInFlight(request));
       return request;
@@ -131,13 +135,13 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
           "Salesforce authentication request failed with an unsuccessful response");
     }
     try {
-      String body = response.body();
-      String accessToken = firstValue(body, "access_token", "accessToken");
-      String instanceUrl = firstValue(body, "instance_url", "instanceUrl");
-      String tenantId = firstValue(body, "tenant_id", "tenantId", "organization_id", "org_id");
-      String userId = firstValue(body, "user_id", "userId");
+      Map<String, String> fields = parseTopLevelStringFields(response.body());
+      String accessToken = firstValue(fields, "access_token", "accessToken");
+      String instanceUrl = firstValue(fields, "instance_url", "instanceUrl");
+      String tenantId = firstValue(fields, "tenant_id", "tenantId", "organization_id", "org_id");
+      String userId = firstValue(fields, "user_id", "userId");
 
-      String identity = firstValue(body, "id");
+      String identity = firstValue(fields, "id");
       if (isBlank(tenantId) || isBlank(userId)) {
         String[] identityParts = identityParts(identity);
         if (isBlank(tenantId)) {
@@ -223,20 +227,116 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
     return value == null || value.isBlank();
   }
 
-  private static String firstValue(String json, String... names) {
-    if (json == null || json.isBlank()) {
-      return null;
-    }
+  private static String firstValue(Map<String, String> fields, String... names) {
     for (String name : names) {
-      Matcher matcher = JSON_STRING_PATTERN.matcher(json);
-      while (matcher.find()) {
-        if (name.equals(matcher.group(1))) {
-          String encodedValue = matcher.group(2);
-          return "null".equals(encodedValue) ? null : decodeJsonString(encodedValue);
-        }
+      if (fields.containsKey(name)) {
+        return fields.get(name);
       }
     }
     return null;
+  }
+
+  private static Map<String, String> parseTopLevelStringFields(String json) {
+    return new FlatJsonObjectParser(json).parse();
+  }
+
+  private static final class FlatJsonObjectParser {
+    private final String json;
+    private int position;
+
+    private FlatJsonObjectParser(String json) {
+      if (json == null) {
+        throw new IllegalArgumentException("Missing JSON response");
+      }
+      this.json = json;
+    }
+
+    private Map<String, String> parse() {
+      Map<String, String> fields = new HashMap<>();
+      skipWhitespace();
+      expect('{');
+      skipWhitespace();
+      if (consume('}')) {
+        requireEnd();
+        return fields;
+      }
+      while (true) {
+        String name = parseString();
+        skipWhitespace();
+        expect(':');
+        skipWhitespace();
+        String value = consumeLiteral("null") ? null : parseString();
+        if (fields.containsKey(name)) {
+          throw new IllegalArgumentException("Duplicate JSON field");
+        }
+        fields.put(name, value);
+        skipWhitespace();
+        if (consume('}')) {
+          requireEnd();
+          return fields;
+        }
+        expect(',');
+        skipWhitespace();
+      }
+    }
+
+    private String parseString() {
+      if (position >= json.length() || json.charAt(position) != '"') {
+        throw new IllegalArgumentException("Expected JSON string");
+      }
+      int start = position++;
+      boolean escaped = false;
+      while (position < json.length()) {
+        char character = json.charAt(position++);
+        if (!escaped && character == '"') {
+          return decodeJsonString(json.substring(start, position));
+        }
+        if (!escaped && character < 0x20) {
+          throw new IllegalArgumentException("Invalid JSON string");
+        }
+        if (escaped) {
+          escaped = false;
+        } else if (character == '\\') {
+          escaped = true;
+        }
+      }
+      throw new IllegalArgumentException("Unterminated JSON string");
+    }
+
+    private boolean consumeLiteral(String literal) {
+      if (!json.startsWith(literal, position)) {
+        return false;
+      }
+      position += literal.length();
+      return true;
+    }
+
+    private boolean consume(char expected) {
+      if (position < json.length() && json.charAt(position) == expected) {
+        position++;
+        return true;
+      }
+      return false;
+    }
+
+    private void expect(char expected) {
+      if (!consume(expected)) {
+        throw new IllegalArgumentException("Invalid JSON response");
+      }
+    }
+
+    private void skipWhitespace() {
+      while (position < json.length() && Character.isWhitespace(json.charAt(position))) {
+        position++;
+      }
+    }
+
+    private void requireEnd() {
+      skipWhitespace();
+      if (position != json.length()) {
+        throw new IllegalArgumentException("Unexpected content after JSON object");
+      }
+    }
   }
 
   private static String decodeJsonString(String encodedValue) {
