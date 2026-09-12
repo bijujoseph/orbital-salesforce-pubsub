@@ -429,6 +429,35 @@ class ClientCredentialsAuthProviderTest {
   }
 
   @Test
+  void rejectsOversizedOAuthResponseWithoutBufferingOrExposingIt() {
+    String oversizedSecret = "response-secret-" + "x".repeat(64 * 1024);
+    replaceResponse(200, oversizedSecret);
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client", "secret");
+
+    AuthenticationException failure =
+        assertInstanceOf(
+            AuthenticationException.class,
+            assertThrows(
+                    CompletionException.class,
+                    () -> provider.authenticate().toCompletableFuture().join())
+                .getCause());
+
+    assertEquals("Salesforce authentication response was invalid", failure.getMessage());
+    assertFalse(failure.getMessage().contains("response-secret"));
+  }
+
+  @Test
+  void rejectsExcessivelyNestedOAuthMetadata() {
+    String nestedValue = "[".repeat(33) + "null" + "]".repeat(33);
+    assertInvalidOAuthResponse(
+        "{\"access_token\":\"token\",\"instance_url\":\"https://instance.example\",\"metadata\":"
+            + nestedValue
+            + "}");
+  }
+
+  @Test
   void handlesNullFieldsAndIdentityValuesIndependently() throws Exception {
     replaceResponse(
         200,

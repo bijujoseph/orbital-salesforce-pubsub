@@ -17,17 +17,22 @@
 package io.github.bijujoseph.salesforce.pubsub.auth;
 
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 
 /**
  * Acquires Salesforce sessions with the OAuth 2.0 client-credentials grant.
@@ -40,6 +45,8 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
 
   private static final String TOKEN_PATH = "/services/oauth2/token";
   private static final Duration AUTH_REQUEST_TIMEOUT = Duration.ofSeconds(30);
+  private static final int MAX_AUTH_RESPONSE_BYTES = 64 * 1024;
+  private static final int MAX_JSON_NESTING_DEPTH = 32;
 
   private final URI tokenEndpoint;
   private final String clientId;
@@ -122,13 +129,22 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
             .build();
 
     return httpClient
-        .sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+        .sendAsync(request, ClientCredentialsAuthProvider::boundedStringBodySubscriber)
         .handle(this::mapResponse)
         .toCompletableFuture();
   }
 
+  private static HttpResponse.BodySubscriber<String> boundedStringBodySubscriber(
+      HttpResponse.ResponseInfo responseInfo) {
+    Objects.requireNonNull(responseInfo, "response info");
+    return new BoundedStringBodySubscriber();
+  }
+
   private SalesforceSession mapResponse(HttpResponse<String> response, Throwable failure) {
     if (failure != null) {
+      if (hasOversizedResponseCause(failure)) {
+        throw new AuthenticationException("Salesforce authentication response was invalid");
+      }
       throw new AuthenticationException("Salesforce authentication request failed");
     }
     if (response == null || response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -158,6 +174,69 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
     } catch (RuntimeException exception) {
       throw new AuthenticationException("Salesforce authentication response was invalid");
     }
+  }
+
+  private static boolean hasOversizedResponseCause(Throwable failure) {
+    Throwable current = failure;
+    while (current != null) {
+      if (current instanceof OversizedResponseException) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  private static final class BoundedStringBodySubscriber
+      implements HttpResponse.BodySubscriber<String> {
+    private final CompletableFuture<String> body = new CompletableFuture<>();
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    private Flow.Subscription subscription;
+
+    @Override
+    public CompletionStage<String> getBody() {
+      return body;
+    }
+
+    @Override
+    public void onSubscribe(Flow.Subscription newSubscription) {
+      if (subscription != null) {
+        newSubscription.cancel();
+        return;
+      }
+      subscription = newSubscription;
+      newSubscription.request(1);
+    }
+
+    @Override
+    public void onNext(List<ByteBuffer> buffers) {
+      for (ByteBuffer buffer : buffers) {
+        int length = buffer.remaining();
+        if (length > MAX_AUTH_RESPONSE_BYTES - bytes.size()) {
+          subscription.cancel();
+          body.completeExceptionally(new OversizedResponseException());
+          return;
+        }
+        byte[] chunk = new byte[length];
+        buffer.get(chunk);
+        bytes.writeBytes(chunk);
+      }
+      subscription.request(1);
+    }
+
+    @Override
+    public void onError(Throwable failure) {
+      body.completeExceptionally(failure);
+    }
+
+    @Override
+    public void onComplete() {
+      body.complete(bytes.toString(StandardCharsets.UTF_8));
+    }
+  }
+
+  private static final class OversizedResponseException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
   }
 
   void clearInFlight(CompletableFuture<SalesforceSession> completedRequest) {
@@ -286,7 +365,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
         } else if (consumeLiteral("null")) {
           value = null;
         } else {
-          skipValue();
+          skipValue(0);
           value = null;
         }
         if (fields.containsKey(name)) {
@@ -334,14 +413,20 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       return true;
     }
 
-    private void skipValue() {
+    private void skipValue(int depth) {
       if (position >= json.length()) {
         throw new IllegalArgumentException("Missing JSON value");
       }
       switch (json.charAt(position)) {
         case '"' -> parseString();
-        case '{' -> skipObject();
-        case '[' -> skipArray();
+        case '{' -> {
+          requireNestingDepth(depth);
+          skipObject(depth + 1);
+        }
+        case '[' -> {
+          requireNestingDepth(depth);
+          skipArray(depth + 1);
+        }
         case 't' -> requireLiteral("true");
         case 'f' -> requireLiteral("false");
         case 'n' -> requireLiteral("null");
@@ -349,7 +434,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       }
     }
 
-    private void skipObject() {
+    private void skipObject(int depth) {
       expect('{');
       skipWhitespace();
       if (consume('}')) {
@@ -360,7 +445,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
         skipWhitespace();
         expect(':');
         skipWhitespace();
-        skipValue();
+        skipValue(depth);
         skipWhitespace();
         if (consume('}')) {
           return;
@@ -370,20 +455,26 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       }
     }
 
-    private void skipArray() {
+    private void skipArray(int depth) {
       expect('[');
       skipWhitespace();
       if (consume(']')) {
         return;
       }
       while (true) {
-        skipValue();
+        skipValue(depth);
         skipWhitespace();
         if (consume(']')) {
           return;
         }
         expect(',');
         skipWhitespace();
+      }
+    }
+
+    private static void requireNestingDepth(int depth) {
+      if (depth >= MAX_JSON_NESTING_DEPTH) {
+        throw new IllegalArgumentException("JSON nesting depth exceeded");
       }
     }
 
