@@ -131,8 +131,10 @@ class SalesforceEventTest {
 
     byte[] first = (byte[]) event.payload().get("bytes");
     first[0] = 0x7F;
+    byte[] second = (byte[]) event.payload().get("bytes");
 
-    assertArrayEquals(new byte[] {0x01, 0x02}, (byte[]) event.payload().get("bytes"));
+    assertNotSame(first, second);
+    assertArrayEquals(new byte[] {0x01, 0x02}, second);
   }
 
   @Test
@@ -201,6 +203,18 @@ class SalesforceEventTest {
     nonStringKeys.put(1, "value");
     assertThrows(
         IllegalArgumentException.class, () -> eventWithPayload(Map.of("nested", nonStringKeys)));
+  }
+
+  @Test
+  void codecIncompatibleScalarWrappersAreRejectedWithoutRenderingTheirValues() {
+    for (Object unsupported : List.of((byte) 7, (short) 8, 'Z')) {
+      IllegalArgumentException failure =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> eventWithPayload(Map.of("unsupported", unsupported)));
+
+      assertFalse(failure.getMessage().contains(String.valueOf(unsupported)));
+    }
   }
 
   private static SalesforceEvent event(String eventId, byte[] replayId) {

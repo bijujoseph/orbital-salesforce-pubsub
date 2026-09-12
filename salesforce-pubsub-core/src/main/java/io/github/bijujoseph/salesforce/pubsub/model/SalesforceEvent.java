@@ -49,7 +49,10 @@ public record SalesforceEvent(
     return copy(replayId);
   }
 
-  /** Returns a fresh, deeply immutable snapshot of the neutral event payload. */
+  /**
+   * Returns a fresh deep defensive snapshot whose maps and collections are unmodifiable and whose
+   * mutable byte values are copied.
+   */
   @Override
   public Map<String, Object> payload() {
     return snapshotPayload(payload);
@@ -108,13 +111,10 @@ public record SalesforceEvent(
     if (value == null
         || value instanceof String
         || value instanceof Boolean
-        || value instanceof Byte
-        || value instanceof Short
         || value instanceof Integer
         || value instanceof Long
         || value instanceof Float
         || value instanceof Double
-        || value instanceof Character
         || value instanceof LocalDate
         || value instanceof Instant) {
       return value;
