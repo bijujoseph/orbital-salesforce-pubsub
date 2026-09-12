@@ -404,6 +404,9 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       throw new PublishException(
           "Salesforce Pub/Sub Publish result failed [code=" + result.getError().getCode() + "]");
     }
+    if (result.getReplayId().isEmpty()) {
+      throw new PublishException("Salesforce Pub/Sub Publish returned an empty replay ID");
+    }
     if (!correlationKey.equals(result.getCorrelationKey())) {
       throw new PublishException("Salesforce Pub/Sub Publish returned a correlation mismatch");
     }

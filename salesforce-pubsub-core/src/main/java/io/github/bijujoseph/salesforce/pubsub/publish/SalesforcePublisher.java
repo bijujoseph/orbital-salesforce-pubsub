@@ -17,8 +17,6 @@
 package io.github.bijujoseph.salesforce.pubsub.publish;
 
 import io.github.bijujoseph.salesforce.pubsub.error.PublishException;
-import io.github.bijujoseph.salesforce.pubsub.schema.ResolvedTopic;
-import io.github.bijujoseph.salesforce.pubsub.schema.SalesforceAvroCodec;
 import io.github.bijujoseph.salesforce.pubsub.schema.SalesforceSchemaCache;
 import io.github.bijujoseph.salesforce.pubsub.schema.TopicResolver;
 import io.github.bijujoseph.salesforce.pubsub.telemetry.NoOpSalesforcePubSubTelemetry;
@@ -28,14 +26,15 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 
 /** Asynchronous unary publisher for one custom Platform Event at a time. */
 public final class SalesforcePublisher {
 
   private final TopicResolver topicResolver;
   private final SalesforceSchemaCache schemaCache;
-  private final SalesforceAvroCodec codec;
   private final PubSubApiTransport transport;
   private final SalesforcePubSubTelemetry telemetry;
 
@@ -52,7 +51,6 @@ public final class SalesforcePublisher {
     SalesforceSchemaCache cache = new SalesforceSchemaCache(checkedTransport, checkedTelemetry);
     this.topicResolver = new TopicResolver(checkedTransport);
     this.schemaCache = cache;
-    this.codec = new SalesforceAvroCodec(cache);
     this.transport = checkedTransport;
     this.telemetry = checkedTelemetry;
   }
@@ -60,12 +58,10 @@ public final class SalesforcePublisher {
   SalesforcePublisher(
       TopicResolver topicResolver,
       SalesforceSchemaCache schemaCache,
-      SalesforceAvroCodec codec,
       PubSubApiTransport transport,
       SalesforcePubSubTelemetry telemetry) {
     this.topicResolver = Objects.requireNonNull(topicResolver, "topic resolver");
     this.schemaCache = Objects.requireNonNull(schemaCache, "schema cache");
-    this.codec = Objects.requireNonNull(codec, "codec");
     this.transport = Objects.requireNonNull(transport, "transport");
     this.telemetry = Objects.requireNonNullElse(telemetry, NoOpSalesforcePubSubTelemetry.INSTANCE);
   }
@@ -92,8 +88,9 @@ public final class SalesforcePublisher {
               .thenCompose(
                   resolvedTopic ->
                       schemaCache
-                          .resolve(resolvedTopic.schemaId())
-                          .thenApply(ignored -> encode(resolvedTopic, payload)))
+                          .resolveAndEncode(resolvedTopic.schemaId(), payload)
+                          .thenApply(
+                              encoded -> new EncodedEvent(resolvedTopic.schemaId(), encoded)))
               .thenCompose(
                   encoded ->
                       transport.publishSingleEvent(
@@ -107,14 +104,11 @@ public final class SalesforcePublisher {
           if (failure == null) {
             recordTelemetry(() -> telemetry.published(topic, correlationKey));
           } else {
-            recordTelemetry(() -> telemetry.publishFailure(topic, failure));
+            Throwable cause = telemetryCause(failure);
+            recordTelemetry(() -> telemetry.publishFailure(topic, cause));
           }
         });
     return result;
-  }
-
-  private EncodedEvent encode(ResolvedTopic topic, Map<String, Object> payload) {
-    return new EncodedEvent(topic.schemaId(), codec.encode(topic.schemaId(), payload));
   }
 
   private static String effectiveCorrelationKey(String supplied) {
@@ -127,6 +121,16 @@ public final class SalesforcePublisher {
     } catch (RuntimeException ignored) {
       // Observability is best-effort and must never alter publication behavior.
     }
+  }
+
+  private static Throwable telemetryCause(Throwable failure) {
+    Throwable cause = failure;
+    while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+        && cause.getCause() != null
+        && cause.getCause() != cause) {
+      cause = cause.getCause();
+    }
+    return cause;
   }
 
   private record EncodedEvent(String schemaId, byte[] payload) {}

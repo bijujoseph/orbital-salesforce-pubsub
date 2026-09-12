@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -46,6 +47,9 @@ import io.github.bijujoseph.salesforce.pubsub.error.TopicNotFoundException;
 import io.github.bijujoseph.salesforce.pubsub.publish.PublishReceipt;
 import io.github.bijujoseph.salesforce.pubsub.publish.PublishRequest;
 import io.github.bijujoseph.salesforce.pubsub.publish.SalesforcePublisher;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.MetricLabels;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.SalesforcePubSubMetric;
+import io.github.bijujoseph.salesforce.pubsub.telemetry.SalesforcePubSubTelemetry;
 import io.github.bijujoseph.salesforce.pubsub.testing.RecordingLogger;
 import io.grpc.ManagedChannel;
 import io.grpc.Server;
@@ -65,9 +69,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericRecord;
@@ -279,6 +287,123 @@ class SalesforcePublisherTest {
   }
 
   @Test
+  void emptyReplayResultFailsWithoutReceiptOrSuccessTelemetry() {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+    service.responseMode = ResponseMode.EMPTY_REPLAY;
+
+    Throwable failure = failureOf(observedPublisher.publish(request(VALID_TOPIC)));
+
+    assertInstanceOf(PublishException.class, failure);
+    assertTrue(failure.getMessage().contains("empty replay ID"));
+    assertEquals(1, service.publishCalls);
+    assertEquals(0, telemetry.successes.get());
+    assertEquals(1, telemetry.failures.size());
+    assertSame(failure, telemetry.failures.get(0));
+    assertEquals("PublishException", telemetry.failureLabels.get(0).exceptionType());
+  }
+
+  @Test
+  void telemetryUsesUnderlyingDomainFailuresWithoutChangingReturnedFailures() {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+
+    Throwable authorization = failureOf(observedPublisher.publish(request("/event/NoPublish__e")));
+    Throwable encoding =
+        failureOf(
+            observedPublisher.publish(
+                new PublishRequest(
+                    VALID_TOPIC,
+                    Map.of("Name__c", PAYLOAD_SENTINEL, "Count__c", "seven"),
+                    "correlation-secret-sentinel")));
+    service.responseMode = ResponseMode.RESULT_ERROR;
+    Throwable publishing = failureOf(observedPublisher.publish(request(VALID_TOPIC)));
+
+    assertInstanceOf(AuthorizationException.class, authorization);
+    assertInstanceOf(EventEncodeException.class, encoding);
+    assertInstanceOf(PublishException.class, publishing);
+    assertEquals(List.of(authorization, encoding, publishing), telemetry.failures);
+    assertEquals(
+        List.of("AuthorizationException", "EventEncodeException", "PublishException"),
+        telemetry.failureLabels.stream().map(MetricLabels::exceptionType).toList());
+    assertEquals(
+        List.of("/event/NoPublish__e", VALID_TOPIC, VALID_TOPIC),
+        telemetry.failureLabels.stream().map(MetricLabels::topic).toList());
+    assertEquals(0, telemetry.successes.get());
+    String diagnostics = telemetry.failures + " " + telemetry.failureLabels;
+    assertFalse(diagnostics.contains(PAYLOAD_SENTINEL));
+    assertFalse(diagnostics.contains(REMOTE_SENTINEL));
+    assertFalse(diagnostics.contains(TOKEN_SENTINEL));
+    assertFalse(diagnostics.contains("correlation-secret-sentinel"));
+    assertFalse(diagnostics.contains("CompletionException"));
+  }
+
+  @Test
+  void cancellationRemainsCallerVisibleAndTelemetryReceivesCancellation() {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+    CompletableFuture<PublishReceipt> publication =
+        observedPublisher.publish(request("/event/Held__e")).toCompletableFuture();
+    assertFalse(publication.isDone());
+
+    assertTrue(publication.cancel(true));
+
+    assertTrue(publication.isCancelled());
+    assertThrows(CancellationException.class, publication::join);
+    assertEquals(0, telemetry.successes.get());
+    assertEquals(1, telemetry.failures.size());
+    assertInstanceOf(CancellationException.class, telemetry.failures.get(0));
+    assertEquals("CancellationException", telemetry.failureLabels.get(0).exceptionType());
+    assertEquals(0, service.publishCalls);
+  }
+
+  @Test
+  void resolvedSchemaSurvivesDeterministicBoundedCacheEvictionBeforeEncoding() throws Exception {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+    CompletableFuture<PublishReceipt> held =
+        observedPublisher.publish(request("/event/Held__e")).toCompletableFuture();
+    assertFalse(held.isDone());
+    assertTrue(service.awaitFirstHeldSchemaRequest());
+
+    int fillerCount = 150;
+    for (int index = 0; index < fillerCount; index++) {
+      PublishReceipt filler =
+          observedPublisher
+              .publish(request("/event/Eviction_" + index + "__e"))
+              .toCompletableFuture()
+              .get(5, TimeUnit.SECONDS);
+      assertEquals("caller-correlation", filler.correlationKey());
+    }
+    assertTrue(telemetry.schemaEvictions.get() > 0);
+    assertFalse(held.isDone());
+    assertEquals(fillerCount, service.publishCalls);
+
+    CompletableFuture<PublishReceipt> secondHeld =
+        observedPublisher
+            .publish(
+                new PublishRequest("/event/Held__e", validPayload(), "second-held-correlation"))
+            .toCompletableFuture();
+    assertTrue(service.awaitTwoHeldSchemaRequests());
+    assertEquals(2, service.schemaRequestCount("schema-held"));
+    assertFalse(secondHeld.isDone());
+
+    service.completeHeldSchemas();
+    PublishReceipt heldReceipt = held.get(5, TimeUnit.SECONDS);
+    PublishReceipt secondHeldReceipt = secondHeld.get(5, TimeUnit.SECONDS);
+
+    assertEquals("/event/Held__e", heldReceipt.topic());
+    assertEquals("second-held-correlation", secondHeldReceipt.correlationKey());
+    assertEquals(fillerCount + 2, service.publishCalls);
+    assertEquals(2, service.schemaRequestCount("schema-held"));
+    com.salesforce.eventbus.protobuf.PublishRequest heldWireRequest =
+        service.publishRequests.get(service.publishRequests.size() - 1);
+    assertEquals("schema-held", heldWireRequest.getEvents(0).getSchemaId());
+    GenericRecord decoded = decode(heldWireRequest.getEvents(0).getPayload().toByteArray());
+    assertEquals(PAYLOAD_SENTINEL, decoded.get("Name__c").toString());
+  }
+
+  @Test
   void rpcAuthenticationFailureRetainsCategoryAndRedactsRemoteAndLocalSecrets() {
     service.responseMode = ResponseMode.RPC_UNAUTHENTICATED;
 
@@ -401,10 +526,42 @@ class SalesforcePublisherTest {
     SUCCESS,
     SUCCESS_WITHOUT_METADATA,
     RESULT_ERROR,
+    EMPTY_REPLAY,
     EMPTY,
     MULTIPLE,
     MISMATCHED_CORRELATION,
     RPC_UNAUTHENTICATED
+  }
+
+  private static final class FailureTelemetry implements SalesforcePubSubTelemetry {
+
+    private final List<Throwable> failures = new ArrayList<>();
+    private final List<MetricLabels> failureLabels = new ArrayList<>();
+    private final AtomicInteger successes = new AtomicInteger();
+    private final AtomicInteger schemaEvictions = new AtomicInteger();
+
+    @Override
+    public void published(String topic, String correlationKey) {
+      successes.incrementAndGet();
+    }
+
+    @Override
+    public void publishFailure(String topic, Throwable cause) {
+      failures.add(cause);
+      SalesforcePubSubTelemetry.super.publishFailure(topic, cause);
+    }
+
+    @Override
+    public void metric(SalesforcePubSubMetric metric, double value, MetricLabels labels) {
+      if (metric == SalesforcePubSubMetric.PUBLISH_FAILURE_TOTAL) {
+        failureLabels.add(labels);
+      }
+    }
+
+    @Override
+    public void schemaCacheEviction() {
+      schemaEvictions.incrementAndGet();
+    }
   }
 
   private final class RecordingService extends PubSubGrpc.PubSubImplBase {
@@ -414,8 +571,12 @@ class SalesforcePublisherTest {
     private final List<String> schemaIds = new ArrayList<>();
     private final List<com.salesforce.eventbus.protobuf.PublishRequest> publishRequests =
         new ArrayList<>();
+    private final Map<String, Integer> schemaRequestCounts = new LinkedHashMap<>();
+    private final CountDownLatch firstHeldSchemaRequest = new CountDownLatch(1);
+    private final CountDownLatch twoHeldSchemaRequests = new CountDownLatch(2);
     private int schemaCalls;
     private int publishCalls;
+    private final List<StreamObserver<SchemaInfo>> heldSchemaObservers = new ArrayList<>();
     private ResponseMode responseMode = ResponseMode.SUCCESS;
 
     @Override
@@ -428,7 +589,7 @@ class SalesforcePublisherTest {
         return;
       }
       boolean canPublish = !"/event/NoPublish__e".equals(topic);
-      String schemaId = "/event/MissingSchema__e".equals(topic) ? "" : SCHEMA_ID;
+      String schemaId = schemaIdFor(topic);
       observer.onNext(
           TopicInfo.newBuilder()
               .setTopicName(topic)
@@ -444,6 +605,13 @@ class SalesforcePublisherTest {
       callOrder.add("GetSchema");
       schemaCalls++;
       schemaIds.add(request.getSchemaId());
+      schemaRequestCounts.merge(request.getSchemaId(), 1, Integer::sum);
+      if ("schema-held".equals(request.getSchemaId())) {
+        heldSchemaObservers.add(observer);
+        firstHeldSchemaRequest.countDown();
+        twoHeldSchemaRequests.countDown();
+        return;
+      }
       String topic = topicNames.get(topicNames.size() - 1);
       String responseSchemaId =
           "/event/MismatchedSchema__e".equals(topic) ? "different-schema" : request.getSchemaId();
@@ -479,11 +647,13 @@ class SalesforcePublisherTest {
       String correlation = request.getEvents(0).getId();
       PublishResult.Builder result =
           PublishResult.newBuilder()
-              .setReplayId(ByteString.copyFrom(REPLAY_ID))
               .setCorrelationKey(
                   responseMode == ResponseMode.MISMATCHED_CORRELATION
                       ? "different-correlation"
                       : correlation);
+      if (responseMode != ResponseMode.EMPTY_REPLAY) {
+        result.setReplayId(ByteString.copyFrom(REPLAY_ID));
+      }
       if (responseMode == ResponseMode.RESULT_ERROR) {
         result.setError(
             Error.newBuilder()
@@ -496,6 +666,42 @@ class SalesforcePublisherTest {
       }
       observer.onNext(response.build());
       observer.onCompleted();
+    }
+
+    private boolean awaitFirstHeldSchemaRequest() throws InterruptedException {
+      return firstHeldSchemaRequest.await(5, TimeUnit.SECONDS);
+    }
+
+    private boolean awaitTwoHeldSchemaRequests() throws InterruptedException {
+      return twoHeldSchemaRequests.await(5, TimeUnit.SECONDS);
+    }
+
+    private void completeHeldSchemas() {
+      List<StreamObserver<SchemaInfo>> observers = List.copyOf(heldSchemaObservers);
+      heldSchemaObservers.clear();
+      for (StreamObserver<SchemaInfo> observer : observers) {
+        observer.onNext(
+            SchemaInfo.newBuilder().setSchemaId("schema-held").setSchemaJson(SCHEMA_JSON).build());
+        observer.onCompleted();
+      }
+    }
+
+    private int schemaRequestCount(String schemaId) {
+      return schemaRequestCounts.getOrDefault(schemaId, 0);
+    }
+
+    private String schemaIdFor(String topic) {
+      if ("/event/MissingSchema__e".equals(topic)) {
+        return "";
+      }
+      if ("/event/Held__e".equals(topic)) {
+        return "schema-held";
+      }
+      if (topic.startsWith("/event/Eviction_")) {
+        return "schema-eviction-"
+            + topic.substring("/event/Eviction_".length(), topic.length() - 3);
+      }
+      return SCHEMA_ID;
     }
   }
 }
