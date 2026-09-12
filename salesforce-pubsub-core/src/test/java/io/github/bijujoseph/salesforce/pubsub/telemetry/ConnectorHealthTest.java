@@ -185,6 +185,75 @@ class ConnectorHealthTest {
   }
 
   @Test
+  void unarySuccessRecoversAccordingToTheActiveSubscriptionRegistry() {
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    Object subscription = new Object();
+
+    assertTrue(health.transitionTo(ConnectorStatus.DEGRADED));
+    assertTrue(health.connectionSucceeded());
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+
+    assertTrue(health.subscriptionSucceeded(subscription, "/event/Test__e"));
+    assertTrue(health.transitionTo(ConnectorStatus.DEGRADED));
+    assertTrue(health.connectionSucceeded());
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+
+    assertTrue(health.transitionTo(ConnectorStatus.FAILED));
+    assertFalse(health.connectionSucceeded());
+    assertEquals(ConnectorStatus.FAILED, health.status());
+    assertEquals(health.status(), telemetry.statuses.getLast());
+  }
+
+  @Test
+  void partialTransientFailurePreservesRegistryAndRequiresSuccessfulRecovery() {
+    List<ConnectorStatus> connectionStates = new ArrayList<>();
+    List<String> topicStates = new ArrayList<>();
+    SalesforcePubSubTelemetry telemetry =
+        new SalesforcePubSubTelemetry() {
+          @Override
+          public void connectionState(String connectionName, ConnectorStatus status) {
+            connectionStates.add(status);
+          }
+
+          @Override
+          public void subscriptionState(
+              String connectionName, String topic, ConnectorStatus status) {
+            topicStates.add(topic + ":" + status);
+          }
+        };
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    Object first = new Object();
+    Object second = new Object();
+    Object third = new Object();
+
+    assertTrue(health.subscriptionSucceeded(first, "/event/A__e"));
+    assertTrue(health.subscriptionSucceeded(second, "/event/A__e"));
+    assertTrue(health.subscriptionSucceeded(third, "/event/B__e"));
+
+    assertTrue(health.subscriptionEnded(first, ConnectorStatus.DEGRADED));
+    assertEquals(ConnectorStatus.DEGRADED, health.status());
+    assertEquals("/event/A__e:SUBSCRIBED", topicStates.getLast());
+    int statesAfterFailure = topicStates.size();
+    assertFalse(health.subscriptionEnded(first, ConnectorStatus.DEGRADED));
+    assertEquals(statesAfterFailure, topicStates.size());
+
+    assertTrue(health.connectionSucceeded());
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+    assertTrue(health.subscriptionEnded(third, ConnectorStatus.DEGRADED));
+    assertEquals(ConnectorStatus.DEGRADED, health.status());
+    assertEquals("/event/B__e:DEGRADED", topicStates.getLast());
+
+    assertTrue(health.subscriptionSucceeded(third, "/event/B__e"));
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+    assertTrue(health.subscriptionEnded(second, ConnectorStatus.CONNECTED));
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+    assertTrue(health.subscriptionEnded(third, ConnectorStatus.CONNECTED));
+    assertEquals(ConnectorStatus.CONNECTED, health.status());
+    assertEquals(health.status(), connectionStates.getLast());
+  }
+
+  @Test
   void concurrentTransitionsPublishInStateOrderWithoutStaleTelemetry() throws Exception {
     CountDownLatch authenticatingPublished = new CountDownLatch(1);
     CountDownLatch releaseAuthentication = new CountDownLatch(1);

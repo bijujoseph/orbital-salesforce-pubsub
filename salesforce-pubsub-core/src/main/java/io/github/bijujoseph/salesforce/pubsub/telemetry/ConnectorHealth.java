@@ -87,10 +87,9 @@ public final class ConnectorHealth {
 
   /** Publishes a successful unary connection without downgrading an active subscription. */
   public synchronized boolean connectionSucceeded() {
-    if (status.get() == ConnectorStatus.SUBSCRIBED) {
-      return false;
-    }
-    return transitionTo(ConnectorStatus.CONNECTED);
+    ConnectorStatus recovered =
+        activeSubscriptions.isEmpty() ? ConnectorStatus.CONNECTED : ConnectorStatus.SUBSCRIBED;
+    return transitionTo(recovered);
   }
 
   /** Publishes the successful establishment of one subscription. */
@@ -129,10 +128,10 @@ public final class ConnectorHealth {
     publishTelemetry(() -> telemetry.subscriptionState(connectionName, activeTopic, topicStatus));
     if (effectiveExit.terminal()) {
       transitionTo(effectiveExit);
+    } else if (exitStatus == ConnectorStatus.DEGRADED) {
+      transitionTo(ConnectorStatus.DEGRADED);
     } else if (activeSubscriptions.isEmpty()) {
       transitionTo(exitStatus);
-    } else if (status.get() != ConnectorStatus.SUBSCRIBED) {
-      transitionTo(ConnectorStatus.SUBSCRIBED);
     }
     return true;
   }
