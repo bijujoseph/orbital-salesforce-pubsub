@@ -41,22 +41,41 @@
 1. Select one approved GitHub Issue that is unblocked and manually set to
    `Ready`. Assign it a dedicated issue branch, worktree, and `coder`. Never
    implement in the shared/default worktree.
-2. Before editing, read the issue and applicable blueprint sections. The issue
-   bounds execution; the blueprint governs requirements. Stop on ambiguity,
-   missing prerequisites, or conflicts among blueprint, plan, issue, and code.
-   Do not guess or widen scope. Apply every relevant architecture, API,
-   security, delivery, test, and documentation rule from the blueprint.
-3. `coder` implements only that issue. `tester` defines expected behavior from
-   the issue and blueprint before reading the implementation, then verifies it
-   independently. `task_reviewer` reviews the completed task. These roles never
-   stage, commit, or push.
-4. Fresh tester evidence plus `READY FOR REVIEW` authorizes
+2. Before the `coder` edits, run `explorer` and `tester` in parallel as
+   independent pre-implementation gates:
+   - `explorer` reads the issue, applicable blueprint sections, approved plan,
+     affected code paths, and authoritative primary documentation when needed.
+     It produces an evidence packet containing exact public API signatures,
+     required invariants, dependency and sequencing constraints, security and
+     error-handling rules, likely affected paths, compatibility risks, and
+     unresolved ambiguities. Every item distinguishes a stated requirement
+     from an inference and cites its repository location or authoritative
+     source. The explorer is read-only and must not invent requirements or
+     widen scope.
+   - `tester` defines expected behavior and concrete acceptance checks from the
+     issue and blueprint before reading the implementation. The tester does not
+     receive or inspect an implementation delta during this gate.
+   - Give both handoffs to the `coder`. Do not begin implementation until they
+     are complete. Stop on ambiguity, missing prerequisites, or conflicts among
+     blueprint, plan, issue, evidence, and code.
+3. The issue bounds execution and the blueprint governs requirements. The
+   `coder` implements only that issue and maintains explicit traceability from
+   each evidence-packet contract and tester expectation to code and tests. Apply
+   every relevant architecture, API, security, delivery, test, and
+   documentation rule. When exact public APIs are specified, verify the
+   compiled signatures and absence of forbidden exposed types, not only runtime
+   behavior. Do not guess or widen scope.
+4. After implementation, `tester` inspects the completed delta and verifies it
+   independently against its predeclared checks and the explorer evidence.
+   `task_reviewer` then reviews the completed task and traceability. `explorer`,
+   `coder`, `tester`, and `task_reviewer` never stage, commit, or push.
+5. Fresh tester evidence plus `READY FOR REVIEW` authorizes
    `pull_request_opener`—the only role allowed to stage, commit, or push—to
    publish the exact reviewed current-worktree diff and open/update the same
    branch/worktree/PR. No additional human approval is required unless a
    current-head Copilot human-review escalation contains no concrete change or
    suggestion that the agents can implement.
-5. After opening a PR, the orchestrator performs an initial read and monitors
+6. After opening a PR, the orchestrator performs an initial read and monitors
    it with read-only `github` MCP calls at least 1 minute apart. Every poll must
    cover actual check-run contexts, review completion, unresolved current-head
    comments, approval, mergeability, and external auto-merge for the exact
@@ -119,7 +138,7 @@
      exact head, CI, review, approval, mergeability, and merge state. Only an
      explicit later request to resume starts new 120- and 10-minute clocks.
    - Agents never merge. GitHub/Copilot may approve and auto-merge externally.
-6. `final_reviewer` evaluates milestone or release readiness across completed
+7. `final_reviewer` evaluates milestone or release readiness across completed
    tasks.
 
 ## Quality gates

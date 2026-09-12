@@ -24,4 +24,12 @@ public final class EventEncodeException extends SalesforcePubSubException {
   public EventEncodeException(String message) {
     super(message);
   }
+
+  /** Creates an encode failure containing only a sanitized schema identifier. */
+  public static EventEncodeException forSchema(String schemaId) {
+    return new EventEncodeException(
+        "Unable to encode Salesforce event [schemaId="
+            + SafeExceptionContext.value(schemaId)
+            + "]");
+  }
 }
