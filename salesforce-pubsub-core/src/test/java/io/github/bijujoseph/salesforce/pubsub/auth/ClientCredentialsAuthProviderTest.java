@@ -34,6 +34,7 @@ import java.net.ProxySelector;
 import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -48,6 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSession;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -170,6 +172,9 @@ class ClientCredentialsAuthProviderTest {
             CompletionException.class, () -> provider.authenticate().toCompletableFuture().join());
     AuthenticationException authenticationException =
         assertInstanceOf(AuthenticationException.class, failure.getCause());
+    assertEquals(
+        "Salesforce authentication request failed with an unsuccessful response",
+        authenticationException.getMessage());
     assertFalse(authenticationException.getMessage().contains("client-secret-is-secret"));
     assertFalse(authenticationException.getMessage().contains("client-secret"));
   }
@@ -355,6 +360,73 @@ class ClientCredentialsAuthProviderTest {
     assertThrows(
         CompletionException.class, () -> provider.authenticate().toCompletableFuture().join());
     assertEquals(2, httpClient.attempts.get());
+  }
+
+  @Test
+  void cancellingSharedAuthenticationCancelsSourceRequest() {
+    ControllableHttpClient httpClient = new ControllableHttpClient();
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider("http://localhost", "client", "secret", httpClient);
+
+    CompletableFuture<SalesforceSession> first = provider.authenticate().toCompletableFuture();
+    CompletableFuture<SalesforceSession> coalesced = provider.authenticate().toCompletableFuture();
+    assertSame(first, coalesced);
+
+    assertTrue(first.cancel(true));
+    assertTrue(coalesced.isCancelled());
+    assertTrue(httpClient.lastSource.isCancelled());
+
+    CompletableFuture<SalesforceSession> replacement =
+        provider.authenticate().toCompletableFuture();
+    assertEquals(2, httpClient.attempts.get());
+    assertTrue(replacement.cancel(true));
+    assertTrue(httpClient.lastSource.isCancelled());
+  }
+
+  @Test
+  void responseAccessFailuresAreSanitizedRegardlessOfExceptionType() {
+    assertResponseAccessFailureSanitized(new IllegalStateException("response-access-secret"));
+    assertResponseAccessFailureSanitized(new AuthenticationException("response-access-secret"));
+  }
+
+  private void assertResponseAccessFailureSanitized(RuntimeException responseFailure) {
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider(
+            "http://localhost",
+            "client",
+            "secret",
+            new ThrowingResponseHttpClient(responseFailure, true));
+
+    assertSanitizedResponseAccessFailure(provider);
+  }
+
+  @Test
+  void bodyAccessFailuresAreSanitizedAndPermitRetry() {
+    assertBodyAccessFailureSanitized(new IllegalStateException("response-access-secret"));
+    assertBodyAccessFailureSanitized(new AuthenticationException("response-access-secret"));
+  }
+
+  private void assertBodyAccessFailureSanitized(RuntimeException responseFailure) {
+    ThrowingResponseHttpClient httpClient = new ThrowingResponseHttpClient(responseFailure, false);
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider("http://localhost", "client", "secret", httpClient);
+
+    assertSanitizedResponseAccessFailure(provider);
+    assertSanitizedResponseAccessFailure(provider);
+    assertEquals(2, httpClient.bodyAccesses.get());
+  }
+
+  private void assertSanitizedResponseAccessFailure(ClientCredentialsAuthProvider provider) {
+    AuthenticationException failure =
+        assertInstanceOf(
+            AuthenticationException.class,
+            assertThrows(
+                    CompletionException.class,
+                    () -> provider.authenticate().toCompletableFuture().join())
+                .getCause());
+
+    assertEquals("Salesforce authentication response was invalid", failure.getMessage());
+    assertFalse(failure.getMessage().contains("response-access-secret"));
   }
 
   @Test
@@ -641,10 +713,110 @@ class ClientCredentialsAuthProviderTest {
     }
   }
 
-  private static final class SynchronouslyFailingHttpClient extends HttpClient {
-    private final HttpClient delegate = HttpClient.newHttpClient();
+  private static final class SynchronouslyFailingHttpClient extends StubHttpClient {
     private final AtomicInteger attempts = new AtomicInteger();
     private HttpRequest lastRequest;
+
+    @Override
+    public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+        HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
+      lastRequest = request;
+      attempts.incrementAndGet();
+      throw new IllegalArgumentException("synchronous-client-secret");
+    }
+  }
+
+  private static final class ControllableHttpClient extends StubHttpClient {
+    private final AtomicInteger attempts = new AtomicInteger();
+    private CompletableFuture<?> lastSource;
+
+    @Override
+    public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+        HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
+      CompletableFuture<HttpResponse<T>> source = new CompletableFuture<>();
+      attempts.incrementAndGet();
+      lastSource = source;
+      return source;
+    }
+  }
+
+  private static final class ThrowingResponseHttpClient extends StubHttpClient {
+    private final RuntimeException responseFailure;
+    private final boolean failStatusAccess;
+    private final AtomicInteger bodyAccesses = new AtomicInteger();
+
+    private ThrowingResponseHttpClient(RuntimeException responseFailure, boolean failStatusAccess) {
+      this.responseFailure = responseFailure;
+      this.failStatusAccess = failStatusAccess;
+    }
+
+    @Override
+    public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+        HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
+      return CompletableFuture.completedFuture(
+          new ThrowingResponse<>(responseFailure, failStatusAccess, bodyAccesses));
+    }
+  }
+
+  private static final class ThrowingResponse<T> implements HttpResponse<T> {
+    private final RuntimeException responseFailure;
+    private final boolean failStatusAccess;
+    private final AtomicInteger bodyAccesses;
+
+    private ThrowingResponse(
+        RuntimeException responseFailure, boolean failStatusAccess, AtomicInteger bodyAccesses) {
+      this.responseFailure = responseFailure;
+      this.failStatusAccess = failStatusAccess;
+      this.bodyAccesses = bodyAccesses;
+    }
+
+    @Override
+    public int statusCode() {
+      if (failStatusAccess) {
+        throw responseFailure;
+      }
+      return 200;
+    }
+
+    @Override
+    public HttpRequest request() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Optional<HttpResponse<T>> previousResponse() {
+      return Optional.empty();
+    }
+
+    @Override
+    public HttpHeaders headers() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public T body() {
+      bodyAccesses.incrementAndGet();
+      throw responseFailure;
+    }
+
+    @Override
+    public Optional<SSLSession> sslSession() {
+      return Optional.empty();
+    }
+
+    @Override
+    public URI uri() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public HttpClient.Version version() {
+      return HttpClient.Version.HTTP_1_1;
+    }
+  }
+
+  private abstract static class StubHttpClient extends HttpClient {
+    private final HttpClient delegate = HttpClient.newHttpClient();
 
     @Override
     public Optional<CookieHandler> cookieHandler() {
@@ -700,18 +872,10 @@ class ClientCredentialsAuthProviderTest {
 
     @Override
     public <T> CompletableFuture<HttpResponse<T>> sendAsync(
-        HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
-      lastRequest = request;
-      attempts.incrementAndGet();
-      throw new IllegalArgumentException("synchronous-client-secret");
-    }
-
-    @Override
-    public <T> CompletableFuture<HttpResponse<T>> sendAsync(
         HttpRequest request,
         HttpResponse.BodyHandler<T> responseBodyHandler,
         HttpResponse.PushPromiseHandler<T> pushPromiseHandler) {
-      throw new IllegalArgumentException("synchronous-client-secret");
+      return sendAsync(request, responseBodyHandler);
     }
   }
 }

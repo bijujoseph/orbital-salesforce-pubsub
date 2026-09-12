@@ -130,10 +130,21 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
             .POST(HttpRequest.BodyPublishers.ofString(form, StandardCharsets.UTF_8))
             .build();
 
-    return httpClient
-        .sendAsync(request, ClientCredentialsAuthProvider::boundedStringBodySubscriber)
-        .handle(this::mapResponse)
-        .toCompletableFuture();
+    CompletableFuture<HttpResponse<String>> source =
+        httpClient.sendAsync(request, ClientCredentialsAuthProvider::boundedStringBodySubscriber);
+    CompletableFuture<SalesforceSession> result = new CancelPropagatingFuture<>(source);
+    source.whenComplete(
+        (response, failure) -> {
+          if (result.isDone()) {
+            return;
+          }
+          try {
+            result.complete(mapResponse(response, failure));
+          } catch (RuntimeException exception) {
+            result.completeExceptionally(exception);
+          }
+        });
+    return result;
   }
 
   private static HttpResponse.BodySubscriber<String> boundedStringBodySubscriber(
@@ -149,12 +160,28 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       }
       throw new AuthenticationException("Salesforce authentication request failed");
     }
-    if (response == null || response.statusCode() < 200 || response.statusCode() >= 300) {
+    if (response == null) {
       throw new AuthenticationException(
           "Salesforce authentication request failed with an unsuccessful response");
     }
+    int statusCode;
     try {
-      Map<String, String> fields = parseTopLevelStringFields(response.body());
+      statusCode = response.statusCode();
+    } catch (RuntimeException exception) {
+      throw new AuthenticationException("Salesforce authentication response was invalid");
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw new AuthenticationException(
+          "Salesforce authentication request failed with an unsuccessful response");
+    }
+    String responseBody;
+    try {
+      responseBody = response.body();
+    } catch (RuntimeException exception) {
+      throw new AuthenticationException("Salesforce authentication response was invalid");
+    }
+    try {
+      Map<String, String> fields = parseTopLevelStringFields(responseBody);
       String accessToken = firstValue(fields, "access_token", "accessToken");
       String instanceUrl = firstValue(fields, "instance_url", "instanceUrl");
       String tenantId = firstValue(fields, "tenant_id", "tenantId", "organization_id", "org_id");
@@ -254,6 +281,23 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
 
     private InvalidResponseException(Throwable cause) {
       super(cause);
+    }
+  }
+
+  private static final class CancelPropagatingFuture<T> extends CompletableFuture<T> {
+    private final CompletableFuture<?> source;
+
+    private CancelPropagatingFuture(CompletableFuture<?> source) {
+      this.source = source;
+    }
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+      boolean cancelled = super.cancel(mayInterruptIfRunning);
+      if (cancelled) {
+        source.cancel(mayInterruptIfRunning);
+      }
+      return cancelled;
     }
   }
 

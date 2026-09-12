@@ -104,22 +104,56 @@ class ConfigurationTest {
   void rejectsInvalidEndpoint() {
     assertThrows(ConfigurationException.class, () -> new EndpointConfig(null, 7443));
     assertThrows(ConfigurationException.class, () -> new EndpointConfig(" ", 7443));
+    assertThrows(
+        ConfigurationException.class, () -> new EndpointConfig("https://example.com", 7443));
+    ConfigurationException credentialHost =
+        assertThrows(
+            ConfigurationException.class,
+            () -> new EndpointConfig("diagnostic-user:diagnostic-password@example.com", 7443));
+    assertEquals("Endpoint host is invalid", credentialHost.getMessage());
+    assertThrows(ConfigurationException.class, () -> new EndpointConfig("example.com/path", 7443));
+    assertThrows(
+        ConfigurationException.class, () -> new EndpointConfig("example.com?token=x", 7443));
+    assertThrows(
+        ConfigurationException.class, () -> new EndpointConfig("example.com#fragment", 7443));
+    assertThrows(ConfigurationException.class, () -> new EndpointConfig("example.com:7443", 7443));
+    assertThrows(
+        ConfigurationException.class, () -> new EndpointConfig("example.invalid:7443", 7443));
+    assertThrows(ConfigurationException.class, () -> new EndpointConfig("dead:beef:7443", 7443));
+    assertThrows(ConfigurationException.class, () -> new EndpointConfig("999.0.0.1", 7443));
+    assertThrows(ConfigurationException.class, () -> new EndpointConfig("2001:db8:::1", 7443));
+    assertThrows(ConfigurationException.class, () -> new EndpointConfig("[example.com]", 7443));
+    assertThrows(
+        ConfigurationException.class, () -> new EndpointConfig("[2001:db8::1]:7443", 7443));
+    assertThrows(ConfigurationException.class, () -> new EndpointConfig("example\n.com", 7443));
     assertThrows(ConfigurationException.class, () -> new EndpointConfig("host", 0));
     assertThrows(ConfigurationException.class, () -> new EndpointConfig("host", 65_536));
   }
 
   @Test
+  void acceptsDnsIpAndLocalEndpointHosts() {
+    assertEquals(
+        "api.pubsub.salesforce.com", new EndpointConfig("api.pubsub.salesforce.com", 7443).host());
+    assertEquals("example.com.", new EndpointConfig("example.com.", 7443).host());
+    assertEquals("localhost", new EndpointConfig(" localhost ", 7443).host());
+    assertEquals("münich.example", new EndpointConfig("münich.example", 7443).host());
+    assertEquals("123", new EndpointConfig("123", 7443).host());
+    assertEquals("1.2.3", new EndpointConfig("1.2.3", 7443).host());
+    assertEquals("127.0.0.1", new EndpointConfig("127.0.0.1", 7443).host());
+    assertEquals("2001:db8::1", new EndpointConfig("2001:db8::1", 7443).host());
+    assertEquals("[2001:db8::1]", new EndpointConfig("[2001:db8::1]", 7443).host());
+    assertEquals("::ffff:192.0.2.128", new EndpointConfig("::ffff:192.0.2.128", 7443).host());
+    assertEquals("fe80::1%eth0", new EndpointConfig("fe80::1%eth0", 7443).host());
+  }
+
+  @Test
   void endpointDiagnosticsDoNotExposeCredentialBearingHosts() {
-    EndpointConfig endpoint =
-        new EndpointConfig(
-            "diagnostic-user:diagnostic-password@example.com?token=query-secret", 7443);
+    EndpointConfig endpoint = new EndpointConfig("private-endpoint.internal", 7443);
     SalesforcePubSubConfig config =
         new SalesforcePubSubConfig(
             "connection", endpoint, FlowControlOptions.defaults(), RetryOptions.defaults());
 
     assertEquals("EndpointConfig[host=<redacted>, port=7443]", endpoint.toString());
-    assertFalse(config.toString().contains("diagnostic-user"));
-    assertFalse(config.toString().contains("diagnostic-password"));
-    assertFalse(config.toString().contains("query-secret"));
+    assertFalse(config.toString().contains("private-endpoint.internal"));
   }
 }
