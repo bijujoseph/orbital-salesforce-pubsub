@@ -16,6 +16,7 @@
 
 package io.github.bijujoseph.salesforce.pubsub.subscription;
 
+import java.util.Arrays;
 import java.util.Objects;
 
 /** Starts immediately after an opaque Salesforce replay position. */
@@ -29,5 +30,16 @@ public record ReplayId(byte[] value) implements SubscriptionStart {
   @Override
   public byte[] value() {
     return value.clone();
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    return this == other
+        || other instanceof ReplayId replayId && Arrays.equals(value, replayId.value);
+  }
+
+  @Override
+  public int hashCode() {
+    return Arrays.hashCode(value);
   }
 }
