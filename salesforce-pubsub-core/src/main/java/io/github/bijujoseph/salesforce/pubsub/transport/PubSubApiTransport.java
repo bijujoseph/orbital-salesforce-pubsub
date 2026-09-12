@@ -617,7 +617,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     void cancel() {
-      if (!cancelState(true)) {
+      if (!cancelState()) {
         return;
       }
       notifyTerminal();
@@ -630,7 +630,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     @Override
     public void closeFromTransport() {
-      if (cancelState(false)) {
+      if (cancelState()) {
         CompletableFuture.runAsync(() -> completion.cancel(false));
       }
     }
@@ -715,20 +715,11 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       return requestObserver;
     }
 
-    private boolean cancelState(boolean waitForOutbound) {
+    private boolean cancelState() {
       while (true) {
         SubscriptionState current = state.get();
         if (current == SubscriptionState.CANCELLED || current == SubscriptionState.TERMINATED) {
           return false;
-        }
-        if (waitForOutbound
-            && (current == SubscriptionState.SENDING
-                || current == SubscriptionState.HALF_CLOSING)) {
-          OutboundPermit outbound = outboundPermit.get();
-          if (outbound != null && outbound.owner() != Thread.currentThread()) {
-            outbound.completion().join();
-            continue;
-          }
         }
         if (state.compareAndSet(current, SubscriptionState.CANCELLED)) {
           return true;
@@ -737,8 +728,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     private OutboundPermit reserveOutbound() {
-      OutboundPermit outbound =
-          new OutboundPermit(Thread.currentThread(), new CompletableFuture<>());
+      OutboundPermit outbound = new OutboundPermit();
       if (!outboundPermit.compareAndSet(null, outbound)) {
         throw inactiveSubscription();
       }
@@ -747,7 +737,6 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     private void releaseOutbound(OutboundPermit outbound) {
       outboundPermit.compareAndSet(outbound, null);
-      outbound.completion().complete(null);
     }
 
     private boolean terminateState() {
@@ -830,7 +819,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
   }
 
-  private record OutboundPermit(Thread owner, CompletableFuture<Void> completion) {}
+  private record OutboundPermit() {}
 
   private enum SubscriptionState {
     RESERVED,

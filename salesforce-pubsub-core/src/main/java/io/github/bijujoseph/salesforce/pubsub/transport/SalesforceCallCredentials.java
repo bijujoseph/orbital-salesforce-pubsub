@@ -16,12 +16,15 @@
 
 package io.github.bijujoseph.salesforce.pubsub.transport;
 
+import com.salesforce.eventbus.protobuf.PubSubGrpc;
 import io.github.bijujoseph.salesforce.pubsub.auth.SalesforceSession;
 import io.grpc.CallCredentials;
 import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import io.grpc.SecurityLevel;
 import io.grpc.Status;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executor;
 
 /** Attaches one immutable Salesforce session snapshot to one gRPC call. */
@@ -33,6 +36,12 @@ public final class SalesforceCallCredentials extends CallCredentials {
       Metadata.Key.of("instanceurl", Metadata.ASCII_STRING_MARSHALLER);
   private static final Metadata.Key<String> TENANT_ID =
       Metadata.Key.of("tenantid", Metadata.ASCII_STRING_MARSHALLER);
+  private static final Set<String> ALLOWED_METHODS =
+      Set.of(
+          PubSubGrpc.getGetTopicMethod().getFullMethodName(),
+          PubSubGrpc.getGetSchemaMethod().getFullMethodName(),
+          PubSubGrpc.getPublishMethod().getFullMethodName(),
+          PubSubGrpc.getSubscribeMethod().getFullMethodName());
 
   private final SessionMetadata session;
 
@@ -53,6 +62,12 @@ public final class SalesforceCallCredentials extends CallCredentials {
       applier.fail(
           Status.UNAUTHENTICATED.withDescription(
               "Salesforce session metadata requires transport security"));
+      return;
+    }
+    if (!isAllowedMethod(requestInfo)) {
+      applier.fail(
+          Status.UNAUTHENTICATED.withDescription(
+              "Salesforce session metadata is unavailable for this RPC"));
       return;
     }
     Objects.requireNonNull(applicationExecutor, "application executor");
@@ -80,6 +95,15 @@ public final class SalesforceCallCredentials extends CallCredentials {
     try {
       return requestInfo != null
           && requestInfo.getSecurityLevel() == SecurityLevel.PRIVACY_AND_INTEGRITY;
+    } catch (RuntimeException exception) {
+      return false;
+    }
+  }
+
+  private static boolean isAllowedMethod(RequestInfo requestInfo) {
+    try {
+      MethodDescriptor<?, ?> method = requestInfo.getMethodDescriptor();
+      return method != null && ALLOWED_METHODS.contains(method.getFullMethodName());
     } catch (RuntimeException exception) {
       return false;
     }

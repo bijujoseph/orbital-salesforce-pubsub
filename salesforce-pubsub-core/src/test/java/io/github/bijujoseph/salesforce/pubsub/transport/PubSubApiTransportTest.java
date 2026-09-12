@@ -62,6 +62,7 @@ import io.grpc.inprocess.InProcessServerBuilder;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.protobuf.ProtoUtils;
+import io.grpc.stub.ClientCallStreamObserver;
 import io.grpc.stub.ClientCalls;
 import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.ServerCallStreamObserver;
@@ -342,6 +343,38 @@ class PubSubApiTransportTest {
           @Override
           public SecurityLevel getSecurityLevel() {
             throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+          }
+
+          @Override
+          public String getAuthority() {
+            return "server-sentinel-authority";
+          }
+
+          @Override
+          public Attributes getTransportAttrs() {
+            return Attributes.EMPTY;
+          }
+        });
+  }
+
+  @Test
+  void credentialsRejectUnrelatedMissingAndThrowingMethodDescriptors() {
+    assertCredentialsRejected(requestInfo(SecurityLevel.PRIVACY_AND_INTEGRITY, PLAIN_METHOD));
+    assertCredentialsRejected(
+        requestInfo(SecurityLevel.PRIVACY_AND_INTEGRITY, PubSubGrpc.getManagedSubscribeMethod()));
+    assertCredentialsRejected(
+        requestInfo(SecurityLevel.PRIVACY_AND_INTEGRITY, PubSubGrpc.getPublishStreamMethod()));
+    assertCredentialsRejected(requestInfo(SecurityLevel.PRIVACY_AND_INTEGRITY, null));
+    assertCredentialsRejected(
+        new CallCredentials.RequestInfo() {
+          @Override
+          public MethodDescriptor<?, ?> getMethodDescriptor() {
+            throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+          }
+
+          @Override
+          public SecurityLevel getSecurityLevel() {
+            return SecurityLevel.PRIVACY_AND_INTEGRITY;
           }
 
           @Override
@@ -808,7 +841,7 @@ class PubSubApiTransportTest {
   }
 
   @RepeatedTest(10)
-  void inProgressSendLinearizesBeforeConcurrentCancel() throws Exception {
+  void concurrentCancelPromptlyCancelsAnInProgressSend() throws Exception {
     RacingSubscriptionService service = new RacingSubscriptionService(true);
     restartServer(service);
     RecordingObserver<FetchResponse> downstream = new RecordingObserver<>();
@@ -826,11 +859,10 @@ class PubSubApiTransportTest {
                 subscription.cancel();
               });
       assertTrue(cancelAttempted.await(5, TimeUnit.SECONDS));
-      assertFalse(cancel.isDone());
+      cancel.get(1, TimeUnit.SECONDS);
 
       service.releaseRequest.countDown();
       send.get(5, TimeUnit.SECONDS);
-      cancel.get(5, TimeUnit.SECONDS);
 
       assertEquals(1, service.requests.get());
       assertTrue(subscription.isCancelled());
@@ -844,6 +876,47 @@ class PubSubApiTransportTest {
       service.releaseRequest.countDown();
       executor.shutdownNow();
       assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void cancellationIsPromptWhileSendOrHalfCloseIsStalled() throws Exception {
+    for (boolean stallSend : List.of(true, false)) {
+      RecordingObserver<FetchResponse> downstream = new RecordingObserver<>();
+      PubSubApiTransport.SubscriptionRpc subscription =
+          new PubSubApiTransport.SubscriptionRpc(downstream);
+      BlockingClientRequestObserver requests = new BlockingClientRequestObserver(stallSend);
+      subscription.attachFallback(requests);
+      ExecutorService executor = Executors.newSingleThreadExecutor();
+      try {
+        Future<?> outbound =
+            executor.submit(
+                () -> {
+                  if (stallSend) {
+                    subscription.send(FetchRequest.getDefaultInstance());
+                  } else {
+                    subscription.complete();
+                  }
+                });
+        assertTrue(requests.outboundEntered.await(5, TimeUnit.SECONDS));
+
+        assertTimeout(Duration.ofSeconds(1), subscription::cancel);
+        assertTrue(requests.cancelled.await(1, TimeUnit.SECONDS));
+        assertThrows(
+            SalesforcePubSubException.class,
+            () -> subscription.send(FetchRequest.getDefaultInstance()));
+
+        requests.releaseOutbound.countDown();
+        outbound.get(5, TimeUnit.SECONDS);
+        assertTrue(subscription.isCancelled());
+        assertEquals(0, downstream.next.get());
+        assertEquals(0, downstream.errors.get());
+        assertEquals(0, downstream.completed.get());
+      } finally {
+        requests.releaseOutbound.countDown();
+        executor.shutdownNow();
+        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+      }
     }
   }
 
@@ -1367,10 +1440,15 @@ class PubSubApiTransportTest {
   }
 
   private static CallCredentials.RequestInfo requestInfo(SecurityLevel securityLevel) {
+    return requestInfo(securityLevel, PubSubGrpc.getGetTopicMethod());
+  }
+
+  private static CallCredentials.RequestInfo requestInfo(
+      SecurityLevel securityLevel, MethodDescriptor<?, ?> method) {
     return new CallCredentials.RequestInfo() {
       @Override
       public MethodDescriptor<?, ?> getMethodDescriptor() {
-        return PLAIN_METHOD;
+        return method;
       }
 
       @Override
@@ -1763,6 +1841,63 @@ class PubSubApiTransportTest {
     @Override
     public void onCompleted() {
       completed.incrementAndGet();
+    }
+  }
+
+  private static final class BlockingClientRequestObserver
+      extends ClientCallStreamObserver<FetchRequest> {
+
+    private final boolean stallSend;
+    private final CountDownLatch outboundEntered = new CountDownLatch(1);
+    private final CountDownLatch releaseOutbound = new CountDownLatch(1);
+    private final CountDownLatch cancelled = new CountDownLatch(1);
+
+    private BlockingClientRequestObserver(boolean stallSend) {
+      this.stallSend = stallSend;
+    }
+
+    @Override
+    public void cancel(String message, Throwable cause) {
+      cancelled.countDown();
+    }
+
+    @Override
+    public boolean isReady() {
+      return true;
+    }
+
+    @Override
+    public void setOnReadyHandler(Runnable handler) {}
+
+    @Override
+    public void disableAutoInboundFlowControl() {}
+
+    @Override
+    public void request(int count) {}
+
+    @Override
+    public void setMessageCompression(boolean enabled) {}
+
+    @Override
+    public void onNext(FetchRequest request) {
+      if (stallSend) {
+        blockOutbound();
+      }
+    }
+
+    @Override
+    public void onError(Throwable failure) {}
+
+    @Override
+    public void onCompleted() {
+      if (!stallSend) {
+        blockOutbound();
+      }
+    }
+
+    private void blockOutbound() {
+      outboundEntered.countDown();
+      await(releaseOutbound);
     }
   }
 
