@@ -37,6 +37,7 @@ import com.salesforce.eventbus.protobuf.SchemaRequest;
 import com.salesforce.eventbus.protobuf.TopicInfo;
 import com.salesforce.eventbus.protobuf.TopicRequest;
 import io.github.bijujoseph.salesforce.pubsub.auth.SalesforceSession;
+import io.github.bijujoseph.salesforce.pubsub.config.EndpointConfig;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
 import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
 import io.grpc.Attributes;
@@ -71,6 +72,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -121,9 +123,12 @@ class PubSubApiTransportTest {
 
   @Test
   void allAllowedRpcShapesReceiveTheExactRequiredMetadata() throws Exception {
-    TopicMetadata topic = transport.getTopic("/event/Test__e").get(5, TimeUnit.SECONDS);
-    SchemaMetadata schema = transport.getSchema("schema-1").get(5, TimeUnit.SECONDS);
-    PublishResponse publish = transport.publish(singlePublish()).get(5, TimeUnit.SECONDS);
+    TopicMetadata topic =
+        transport.getTopic("/event/Test__e").toCompletableFuture().get(5, TimeUnit.SECONDS);
+    SchemaMetadata schema =
+        transport.getSchema("schema-1").toCompletableFuture().get(5, TimeUnit.SECONDS);
+    PublishResponse publish =
+        transport.publish(singlePublish()).toCompletableFuture().get(5, TimeUnit.SECONDS);
     CompletableFuture<FetchResponse> subscriptionResponse = new CompletableFuture<>();
     PubSubApiTransport.SubscriptionRpc subscription =
         transport.subscribe(singleResponseObserver(subscriptionResponse));
@@ -144,7 +149,7 @@ class PubSubApiTransportTest {
 
   @Test
   void metadataIsScopedAwayFromAnUnrelatedCallOnTheSameChannel() throws Exception {
-    transport.getTopic("salesforce").get(5, TimeUnit.SECONDS);
+    transport.getTopic("salesforce").toCompletableFuture().get(5, TimeUnit.SECONDS);
     StringValue plainResponse = plainCall("plain").get(5, TimeUnit.SECONDS);
 
     assertEquals("plain", plainResponse.getValue());
@@ -158,12 +163,28 @@ class PubSubApiTransportTest {
 
   @Test
   void rpcStartedAfterRefreshUsesTheReplacementSession() throws Exception {
-    transport.getTopic("before").get(5, TimeUnit.SECONDS);
+    transport.getTopic("before").toCompletableFuture().get(5, TimeUnit.SECONDS);
     transport.updateSession(session(1));
-    transport.getTopic("after").get(5, TimeUnit.SECONDS);
+    transport.getTopic("after").toCompletableFuture().get(5, TimeUnit.SECONDS);
 
     assertObserved("GetTopic", received.remove(), 0);
     assertObserved("GetTopic", received.remove(), 1);
+  }
+
+  @Test
+  void allAllowedRpcShapesReservedBeforeRefreshUseTheSessionCapturedAtStart() throws Exception {
+    RpcStartBarrier barrier = new RpcStartBarrier();
+    restartServer(new RespondingService(), barrier, () -> {});
+
+    assertRefreshOrderingForAllAllowedRpcShapes(barrier, 1);
+  }
+
+  @Test
+  void allAllowedRpcShapesStartedBeforeRefreshKeepTheirCapturedSession() throws Exception {
+    RpcStartBarrier barrier = new RpcStartBarrier();
+    restartServer(new RespondingService(), () -> {}, barrier);
+
+    assertRefreshOrderingForAllAllowedRpcShapes(barrier, 0);
   }
 
   @RepeatedTest(10)
@@ -178,7 +199,7 @@ class PubSubApiTransportTest {
             executor.submit(
                 () -> {
                   try {
-                    transport.getTopic("concurrent").get(5, TimeUnit.SECONDS);
+                    transport.getTopic("concurrent").toCompletableFuture().get(5, TimeUnit.SECONDS);
                   } catch (Exception exception) {
                     throw new AssertionError("RPC did not complete", exception);
                   }
@@ -221,7 +242,7 @@ class PubSubApiTransportTest {
         new SalesforceSession("replacement-secret", "https://replacement.example", null, null);
 
     assertThrows(AuthenticationException.class, () -> transport.updateSession(incomplete));
-    transport.getTopic("still-current").get(5, TimeUnit.SECONDS);
+    transport.getTopic("still-current").toCompletableFuture().get(5, TimeUnit.SECONDS);
 
     assertObserved("GetTopic", received.remove(), 0);
   }
@@ -242,6 +263,23 @@ class PubSubApiTransportTest {
     } finally {
       sensitiveTransport.close();
     }
+  }
+
+  @Test
+  void channelHostNormalizesOnlyTheEndpointIpv6BracketPair() {
+    assertEquals(
+        "2001:db8::1",
+        PubSubApiTransport.channelHost(new EndpointConfig("[2001:db8::1]", 7443).host()));
+    assertEquals(
+        "fe80::1%eth0",
+        PubSubApiTransport.channelHost(new EndpointConfig("[fe80::1%eth0]", 7443).host()));
+    assertEquals(
+        "2001:db8::1",
+        PubSubApiTransport.channelHost(new EndpointConfig("2001:db8::1", 7443).host()));
+    assertEquals(
+        "api.pubsub.salesforce.com",
+        PubSubApiTransport.channelHost(
+            new EndpointConfig("api.pubsub.salesforce.com", 7443).host()));
   }
 
   @Test
@@ -359,7 +397,7 @@ class PubSubApiTransportTest {
   @Test
   void serverAndCauseDescriptionsAreSanitizedAtTheAsyncBoundary() throws Exception {
     restartServer(new FailingService());
-    CompletableFuture<TopicMetadata> response = transport.getTopic("failure");
+    CompletableFuture<TopicMetadata> response = transport.getTopic("failure").toCompletableFuture();
 
     Exception wrapper = assertThrows(Exception.class, () -> response.get(5, TimeUnit.SECONDS));
     SalesforcePubSubException failure =
@@ -375,7 +413,8 @@ class PubSubApiTransportTest {
     ThrowingManagedChannel throwingChannel = new ThrowingManagedChannel();
     PubSubApiTransport failingTransport = new PubSubApiTransport(throwingChannel, session(0));
     try {
-      CompletableFuture<TopicMetadata> response = failingTransport.getTopic("failure");
+      CompletableFuture<TopicMetadata> response =
+          failingTransport.getTopic("failure").toCompletableFuture();
       Exception wrapper = assertThrows(Exception.class, () -> response.get(5, TimeUnit.SECONDS));
       SalesforcePubSubException failure =
           assertInstanceOf(SalesforcePubSubException.class, wrapper.getCause());
@@ -415,19 +454,178 @@ class PubSubApiTransportTest {
     HoldingUnaryService service = new HoldingUnaryService();
     restartServer(service);
 
-    CompletableFuture<TopicMetadata> response = transport.getTopic("held");
+    CompletableFuture<TopicMetadata> response = transport.getTopic("held").toCompletableFuture();
     assertTrue(service.responseSent.await(5, TimeUnit.SECONDS));
 
     assertFalse(response.isDone());
-    assertTrue(response.cancel(true));
+    transport.close();
     assertTrue(service.cancelled.await(5, TimeUnit.SECONDS));
+  }
+
+  @Test
+  void closeWinningAfterUnaryRegistrationPreventsChannelCallStart() throws Exception {
+    CountingManagedChannel countingChannel = new CountingManagedChannel();
+    CountDownLatch registered = new CountDownLatch(1);
+    CountDownLatch releaseStart = new CountDownLatch(1);
+    PubSubApiTransport racingTransport =
+        new PubSubApiTransport(
+            countingChannel,
+            session(0),
+            () -> {
+              registered.countDown();
+              await(releaseStart);
+            });
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<CompletionStage<TopicMetadata>> call =
+          executor.submit(() -> racingTransport.getTopic("registered"));
+      assertTrue(registered.await(5, TimeUnit.SECONDS));
+
+      racingTransport.close();
+      releaseStart.countDown();
+      call.get(5, TimeUnit.SECONDS);
+
+      assertEquals(0, countingChannel.newCalls.get());
+      assertTrue(countingChannel.isShutdown());
+    } finally {
+      releaseStart.countDown();
+      racingTransport.close();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void closeWinningAfterSubscriptionRegistrationPreventsChannelCallStart() throws Exception {
+    CountingManagedChannel countingChannel = new CountingManagedChannel();
+    CountDownLatch registered = new CountDownLatch(1);
+    CountDownLatch releaseStart = new CountDownLatch(1);
+    PubSubApiTransport racingTransport =
+        new PubSubApiTransport(
+            countingChannel,
+            session(0),
+            () -> {
+              registered.countDown();
+              await(releaseStart);
+            });
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<PubSubApiTransport.SubscriptionRpc> call =
+          executor.submit(() -> racingTransport.subscribe(new RecordingObserver<>()));
+      assertTrue(registered.await(5, TimeUnit.SECONDS));
+
+      racingTransport.close();
+      releaseStart.countDown();
+      PubSubApiTransport.SubscriptionRpc subscription = call.get(5, TimeUnit.SECONDS);
+
+      assertTrue(subscription.isCancelled());
+      assertEquals(0, countingChannel.newCalls.get());
+      assertTrue(countingChannel.isShutdown());
+    } finally {
+      releaseStart.countDown();
+      racingTransport.close();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void closeAfterUnaryStartClaimPreventsDelayedCallFromReachingServer() throws Exception {
+    DelayedService service = new DelayedService();
+    CountDownLatch startClaimed = new CountDownLatch(1);
+    CountDownLatch releaseInvocation = new CountDownLatch(1);
+    restartServer(
+        service,
+        () -> {},
+        () -> {
+          startClaimed.countDown();
+          await(releaseInvocation);
+        });
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<CompletionStage<TopicMetadata>> call =
+          executor.submit(() -> transport.getTopic("claimed"));
+      assertTrue(startClaimed.await(5, TimeUnit.SECONDS));
+
+      assertTimeout(Duration.ofSeconds(1), transport::close);
+      releaseInvocation.countDown();
+      CompletableFuture<TopicMetadata> view = call.get(5, TimeUnit.SECONDS).toCompletableFuture();
+
+      awaitCancellation(view);
+      assertFalse(service.started.await(100, TimeUnit.MILLISECONDS));
+      assertTrue(channel.awaitTermination(5, TimeUnit.SECONDS));
+    } finally {
+      releaseInvocation.countDown();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void closeAfterSubscriptionStartClaimPreventsDelayedCallFromReachingServerOrObserver()
+      throws Exception {
+    RacingSubscriptionService service = new RacingSubscriptionService(false);
+    CountDownLatch startClaimed = new CountDownLatch(1);
+    CountDownLatch releaseInvocation = new CountDownLatch(1);
+    restartServer(
+        service,
+        () -> {},
+        () -> {
+          startClaimed.countDown();
+          await(releaseInvocation);
+        });
+    RecordingObserver<FetchResponse> downstream = new RecordingObserver<>();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<PubSubApiTransport.SubscriptionRpc> call =
+          executor.submit(() -> transport.subscribe(downstream));
+      assertTrue(startClaimed.await(5, TimeUnit.SECONDS));
+
+      assertTimeout(Duration.ofSeconds(1), transport::close);
+      releaseInvocation.countDown();
+      PubSubApiTransport.SubscriptionRpc subscription = call.get(5, TimeUnit.SECONDS);
+
+      assertTrue(subscription.isCancelled());
+      assertFalse(service.subscribed.await(100, TimeUnit.MILLISECONDS));
+      assertEquals(0, downstream.next.get());
+      assertEquals(0, downstream.errors.get());
+      assertEquals(0, downstream.completed.get());
+      assertTrue(channel.awaitTermination(5, TimeUnit.SECONDS));
+    } finally {
+      releaseInvocation.countDown();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void publicUnaryStageMutationCannotForgeOrUnregisterTheLiveRpc() throws Exception {
+    assertPublicMutationDoesNotOwnRpc(true);
+    assertPublicMutationDoesNotOwnRpc(false);
+  }
+
+  @Test
+  void concreteUnaryReturnDescriptorsRemainCompletableFuture() throws Exception {
+    assertEquals(
+        CompletableFuture.class,
+        PubSubApiTransport.class.getMethod("getTopic", String.class).getReturnType());
+    assertEquals(
+        CompletableFuture.class,
+        PubSubApiTransport.class.getMethod("getSchema", String.class).getReturnType());
+    assertEquals(
+        CompletionStage.class,
+        SalesforceEventTransport.class.getMethod("getTopic", String.class).getReturnType());
+    assertEquals(
+        CompletionStage.class,
+        SalesforceEventTransport.class.getMethod("getSchema", String.class).getReturnType());
   }
 
   @Test
   void unaryLateErrorWinsOverBufferedResponseAndIsSanitized() throws Exception {
     restartServer(new ResponseThenErrorService());
 
-    CompletableFuture<TopicMetadata> response = transport.getTopic("late-error");
+    CompletableFuture<TopicMetadata> response =
+        transport.getTopic("late-error").toCompletableFuture();
     Exception wrapper = assertThrows(Exception.class, () -> response.get(5, TimeUnit.SECONDS));
     SalesforcePubSubException failure =
         assertInstanceOf(SalesforcePubSubException.class, wrapper.getCause());
@@ -482,7 +680,7 @@ class PubSubApiTransportTest {
   void closeIsImmediateIdempotentAndCancelsAnActiveRpc() throws Exception {
     DelayedService delayedService = new DelayedService();
     restartServer(delayedService);
-    CompletableFuture<TopicMetadata> response = transport.getTopic("blocked");
+    CompletableFuture<TopicMetadata> response = transport.getTopic("blocked").toCompletableFuture();
     assertTrue(delayedService.started.await(5, TimeUnit.SECONDS));
 
     assertTimeout(Duration.ofSeconds(1), transport::close);
@@ -500,7 +698,8 @@ class PubSubApiTransportTest {
   void closeCancelsABufferedUnaryAndLateServerTerminalCannotChangeIt() throws Exception {
     HoldingUnaryService service = new HoldingUnaryService();
     restartServer(service);
-    CompletableFuture<TopicMetadata> response = transport.getTopic("buffered");
+    CompletableFuture<TopicMetadata> response =
+        transport.getTopic("buffered").toCompletableFuture();
     assertTrue(service.responseSent.await(5, TimeUnit.SECONDS));
 
     transport.close();
@@ -508,15 +707,15 @@ class PubSubApiTransportTest {
     service.completeLate();
     service.errorLate();
 
-    assertTrue(response.isCancelled());
-    assertThrows(java.util.concurrent.CancellationException.class, response::join);
+    assertTrue(response.isCompletedExceptionally());
   }
 
   @Test
   void closeDoesNotRunOrWaitForUnaryCompletionDependents() throws Exception {
     DelayedService service = new DelayedService();
     restartServer(service);
-    CompletableFuture<TopicMetadata> response = transport.getTopic("blocked-dependent");
+    CompletableFuture<TopicMetadata> response =
+        transport.getTopic("blocked-dependent").toCompletableFuture();
     assertTrue(service.started.await(5, TimeUnit.SECONDS));
     CountDownLatch dependentEntered = new CountDownLatch(1);
     CountDownLatch releaseDependent = new CountDownLatch(1);
@@ -535,7 +734,8 @@ class PubSubApiTransportTest {
 
   @Test
   void unaryTerminalBeforeCloseRemainsSuccessful() throws Exception {
-    CompletableFuture<TopicMetadata> response = transport.getTopic("complete-first");
+    CompletableFuture<TopicMetadata> response =
+        transport.getTopic("complete-first").toCompletableFuture();
     TopicMetadata completed = response.get(5, TimeUnit.SECONDS);
 
     transport.close();
@@ -545,24 +745,44 @@ class PubSubApiTransportTest {
   }
 
   @Test
-  void cancellingUnaryFutureAndSubscriptionCancelsTheirGrpcCalls() throws Exception {
+  void cancellingSubscriptionCancelsItsGrpcCall() throws Exception {
     DelayedService delayedService = new DelayedService();
     restartServer(delayedService);
-    CompletableFuture<TopicMetadata> unary = transport.getTopic("cancelled");
     CompletableFuture<FetchResponse> response = new CompletableFuture<>();
     PubSubApiTransport.SubscriptionRpc subscription =
         transport.subscribe(singleResponseObserver(response));
     subscription.send(FetchRequest.newBuilder().setTopicName("cancelled").build());
-    assertTrue(delayedService.started.await(5, TimeUnit.SECONDS));
     assertTrue(delayedService.subscriptionStarted.await(5, TimeUnit.SECONDS));
 
-    assertTrue(unary.cancel(true));
     subscription.cancel();
 
-    assertTrue(unary.isCancelled());
     assertTrue(subscription.isCancelled());
-    assertTrue(delayedService.unaryCancelled.await(5, TimeUnit.SECONDS));
     assertTrue(delayedService.subscriptionCancelled.await(5, TimeUnit.SECONDS));
+  }
+
+  @Test
+  void subscriptionCancelReachesNetworkWithoutWaitingForCompletionDependent() throws Exception {
+    DelayedService delayedService = new DelayedService();
+    restartServer(delayedService);
+    PubSubApiTransport.SubscriptionRpc subscription =
+        transport.subscribe(new RecordingObserver<>());
+    subscription.send(FetchRequest.newBuilder().setTopicName("cancelled").build());
+    assertTrue(delayedService.subscriptionStarted.await(5, TimeUnit.SECONDS));
+    CountDownLatch dependentEntered = new CountDownLatch(1);
+    CountDownLatch releaseDependent = new CountDownLatch(1);
+    subscription
+        .completion()
+        .whenComplete(
+            (ignored, failure) -> {
+              dependentEntered.countDown();
+              await(releaseDependent);
+            });
+
+    assertTimeout(Duration.ofSeconds(1), subscription::cancel);
+    assertTrue(delayedService.subscriptionCancelled.await(5, TimeUnit.SECONDS));
+    assertTrue(dependentEntered.await(5, TimeUnit.SECONDS));
+    assertTrue(subscription.isCancelled());
+    releaseDependent.countDown();
   }
 
   @Test
@@ -587,7 +807,7 @@ class PubSubApiTransportTest {
     assertEquals(0, downstream.completed.get());
   }
 
-  @Test
+  @RepeatedTest(10)
   void inProgressSendLinearizesBeforeConcurrentCancel() throws Exception {
     RacingSubscriptionService service = new RacingSubscriptionService(true);
     restartServer(service);
@@ -606,10 +826,11 @@ class PubSubApiTransportTest {
                 subscription.cancel();
               });
       assertTrue(cancelAttempted.await(5, TimeUnit.SECONDS));
-      cancel.get(5, TimeUnit.SECONDS);
+      assertFalse(cancel.isDone());
 
       service.releaseRequest.countDown();
       send.get(5, TimeUnit.SECONDS);
+      cancel.get(5, TimeUnit.SECONDS);
 
       assertEquals(1, service.requests.get());
       assertTrue(subscription.isCancelled());
@@ -624,6 +845,39 @@ class PubSubApiTransportTest {
       executor.shutdownNow();
       assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
     }
+  }
+
+  @Test
+  void reentrantCancelFromOutboundSendDoesNotWaitOnItsOwnPermit() {
+    AtomicReference<PubSubApiTransport.SubscriptionRpc> subscriptionReference =
+        new AtomicReference<>();
+    AtomicInteger outboundCalls = new AtomicInteger();
+    PubSubApiTransport.SubscriptionRpc subscription =
+        new PubSubApiTransport.SubscriptionRpc(new RecordingObserver<>());
+    subscription.attachFallback(
+        new StreamObserver<>() {
+          @Override
+          public void onNext(FetchRequest request) {
+            outboundCalls.incrementAndGet();
+            subscriptionReference.get().cancel();
+          }
+
+          @Override
+          public void onError(Throwable failure) {}
+
+          @Override
+          public void onCompleted() {}
+        });
+    subscriptionReference.set(subscription);
+
+    assertTimeout(
+        Duration.ofSeconds(1), () -> subscription.send(FetchRequest.getDefaultInstance()));
+
+    assertTrue(subscription.isCancelled());
+    assertEquals(1, outboundCalls.get());
+    assertThrows(
+        SalesforcePubSubException.class,
+        () -> subscription.send(FetchRequest.getDefaultInstance()));
   }
 
   @Test
@@ -703,13 +957,14 @@ class PubSubApiTransportTest {
   }
 
   @Test
-  void earlySynchronousCallbackCanCloseTransportWithoutRegistrationDeadlock() throws Exception {
+  void earlySynchronousCallbackCanRefreshAndCloseWithoutLifecycleDeadlock() throws Exception {
     restartServer(new EarlyCallbackService());
     CountDownLatch callbackReturned = new CountDownLatch(1);
     StreamObserver<FetchResponse> downstream =
         new StreamObserver<>() {
           @Override
           public void onNext(FetchResponse value) {
+            transport.updateSession(session(1));
             transport.close();
             callbackReturned.countDown();
           }
@@ -941,6 +1196,41 @@ class PubSubApiTransportTest {
     assertSafe(failure.getCause().toString());
   }
 
+  private void assertPublicMutationDoesNotOwnRpc(boolean completeNormally) throws Exception {
+    HoldingUnaryService service = new HoldingUnaryService();
+    restartServer(service);
+    CompletionStage<TopicMetadata> stage = transport.getTopic("held");
+    assertTrue(service.responseSent.await(5, TimeUnit.SECONDS));
+    CompletableFuture<TopicMetadata> publicView = stage.toCompletableFuture();
+
+    if (completeNormally) {
+      assertFalse(publicView.complete(new TopicMetadata("forged", false, false, "forged")));
+    } else {
+      assertFalse(publicView.completeExceptionally(new IllegalStateException("forged")));
+    }
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> publicView.obtrudeValue(new TopicMetadata("forged", false, false, "forged")));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> publicView.obtrudeException(new IllegalStateException("forged")));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> publicView.completeAsync(() -> new TopicMetadata("forged", false, false, "forged")));
+    assertThrows(
+        UnsupportedOperationException.class, () -> publicView.orTimeout(1, TimeUnit.MILLISECONDS));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () ->
+            publicView.completeOnTimeout(
+                new TopicMetadata("forged", false, false, "forged"), 1, TimeUnit.MILLISECONDS));
+
+    assertFalse(service.cancelled.await(100, TimeUnit.MILLISECONDS));
+    assertTrue(publicView.cancel(true));
+    assertTrue(service.cancelled.await(5, TimeUnit.SECONDS));
+    assertTrue(publicView.isCancelled());
+  }
+
   private static SubscriptionHarness subscriptionHarness(StreamObserver<FetchResponse> downstream) {
     PubSubApiTransport.SubscriptionRpc subscription =
         new PubSubApiTransport.SubscriptionRpc(downstream);
@@ -979,6 +1269,16 @@ class PubSubApiTransportTest {
     receivedCalls.set(0);
     startServer(service);
     transport = new PubSubApiTransport(channel, session(0));
+  }
+
+  private void restartServer(
+      PubSubGrpc.PubSubImplBase service, Runnable beforeRpcStart, Runnable afterRpcStart)
+      throws Exception {
+    closeCurrentResources();
+    received.clear();
+    receivedCalls.set(0);
+    startServer(service);
+    transport = new PubSubApiTransport(channel, session(0), beforeRpcStart, afterRpcStart);
   }
 
   private void startServer(PubSubGrpc.PubSubImplBase service) throws Exception {
@@ -1138,6 +1438,45 @@ class PubSubApiTransportTest {
         call.headers());
   }
 
+  private void assertRefreshOrderingForAllAllowedRpcShapes(
+      RpcStartBarrier barrier, int expectedGenerationOffset) throws Exception {
+    List<Runnable> calls =
+        List.of(
+            () -> transport.getTopic("refresh-race").join(),
+            () -> transport.getSchema("refresh-race").join(),
+            () -> transport.publish(singlePublish()).toCompletableFuture().join(),
+            () -> {
+              CompletableFuture<FetchResponse> response = new CompletableFuture<>();
+              PubSubApiTransport.SubscriptionRpc subscription =
+                  transport.subscribe(singleResponseObserver(response));
+              subscription.send(
+                  FetchRequest.newBuilder().setTopicName("/event/RefreshRace__e").build());
+              response.join();
+              subscription.complete();
+              subscription.completion().toCompletableFuture().join();
+            });
+    List<String> methods = List.of("GetTopic", "GetSchema", "Publish", "Subscribe");
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      for (int index = 0; index < calls.size(); index++) {
+        RpcStartGate gate = barrier.arm();
+        Future<?> call = executor.submit(calls.get(index));
+        assertTrue(gate.entered().await(5, TimeUnit.SECONDS));
+        try {
+          transport.updateSession(session(index + 1));
+        } finally {
+          gate.release().countDown();
+        }
+        call.get(5, TimeUnit.SECONDS);
+        assertObserved(methods.get(index), received.remove(), index + expectedGenerationOffset);
+      }
+    } finally {
+      barrier.releaseCurrent();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
   private void assertSafe(String value) {
     assertFalse(value.contains("token-0"));
     assertFalse(value.contains("instance-0"));
@@ -1160,6 +1499,37 @@ class PubSubApiTransportTest {
   private record SubscriptionHarness(
       PubSubApiTransport.SubscriptionRpc subscription,
       ClientResponseObserver<FetchRequest, FetchResponse> responses) {}
+
+  private record RpcStartGate(CountDownLatch entered, CountDownLatch release) {}
+
+  private static final class RpcStartBarrier implements Runnable {
+
+    private final AtomicReference<RpcStartGate> current = new AtomicReference<>();
+
+    private RpcStartGate arm() {
+      RpcStartGate gate = new RpcStartGate(new CountDownLatch(1), new CountDownLatch(1));
+      assertTrue(current.compareAndSet(null, gate));
+      return gate;
+    }
+
+    @Override
+    public void run() {
+      RpcStartGate gate = current.get();
+      if (gate == null) {
+        return;
+      }
+      gate.entered().countDown();
+      await(gate.release());
+      current.compareAndSet(gate, null);
+    }
+
+    private void releaseCurrent() {
+      RpcStartGate gate = current.get();
+      if (gate != null) {
+        gate.release().countDown();
+      }
+    }
+  }
 
   private final class RespondingService extends PubSubGrpc.PubSubImplBase {
 
@@ -1523,6 +1893,50 @@ class PubSubApiTransportTest {
     public <RequestT, ResponseT> ClientCall<RequestT, ResponseT> newCall(
         MethodDescriptor<RequestT, ResponseT> method, CallOptions callOptions) {
       throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+    }
+
+    @Override
+    public String authority() {
+      return "safe-authority";
+    }
+  }
+
+  private static final class CountingManagedChannel extends ManagedChannel {
+
+    private final AtomicInteger newCalls = new AtomicInteger();
+    private volatile boolean shutdown;
+
+    @Override
+    public ManagedChannel shutdown() {
+      shutdown = true;
+      return this;
+    }
+
+    @Override
+    public boolean isShutdown() {
+      return shutdown;
+    }
+
+    @Override
+    public boolean isTerminated() {
+      return shutdown;
+    }
+
+    @Override
+    public ManagedChannel shutdownNow() {
+      return shutdown();
+    }
+
+    @Override
+    public boolean awaitTermination(long timeout, TimeUnit unit) {
+      return shutdown;
+    }
+
+    @Override
+    public <RequestT, ResponseT> ClientCall<RequestT, ResponseT> newCall(
+        MethodDescriptor<RequestT, ResponseT> method, CallOptions callOptions) {
+      newCalls.incrementAndGet();
+      throw new AssertionError("RPC started after close won registration race");
     }
 
     @Override

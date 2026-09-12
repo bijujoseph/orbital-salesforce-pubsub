@@ -22,10 +22,24 @@ import java.util.concurrent.CompletionStage;
 /** Lifecycle and session contract shared by Salesforce event transports. */
 public interface SalesforceEventTransport extends AutoCloseable {
 
-  /** Fetches raw topic information without applying topic policy or caching. */
+  /**
+   * Fetches raw topic information without applying topic policy or caching.
+   *
+   * <p>The direct result of {@link CompletionStage#toCompletableFuture()} supports caller
+   * cancellation of the live RPC. Forced completion, obtrusion, asynchronous completion, and
+   * timeout mutation are rejected and cannot complete or unregister the RPC. Cancellation of a
+   * stage derived from this result is not an RPC-cancellation mechanism.
+   */
   CompletionStage<TopicMetadata> getTopic(String topicName);
 
-  /** Fetches raw schema information without applying schema policy or caching. */
+  /**
+   * Fetches raw schema information without applying schema policy or caching.
+   *
+   * <p>The direct result of {@link CompletionStage#toCompletableFuture()} supports caller
+   * cancellation of the live RPC. Forced completion, obtrusion, asynchronous completion, and
+   * timeout mutation are rejected and cannot complete or unregister the RPC. Cancellation of a
+   * stage derived from this result is not an RPC-cancellation mechanism.
+   */
   CompletionStage<SchemaMetadata> getSchema(String schemaId);
 
   /** Atomically replaces the session used by RPCs that start after this call. */

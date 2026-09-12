@@ -40,11 +40,15 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Secure asynchronous transport for Salesforce Pub/Sub API calls.
@@ -62,6 +66,8 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
   private final AtomicBoolean closed = new AtomicBoolean();
   private final Object lifecycleLock = new Object();
   private final Set<ActiveOperation> activeOperations = new HashSet<>();
+  private final Runnable beforeRpcStart;
+  private final Runnable afterRpcStart;
 
   /**
    * Creates a TLS-protected HTTP/2 channel using an already-acquired Salesforce session.
@@ -73,15 +79,46 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
   }
 
   PubSubApiTransport(ManagedChannel channel, SalesforceSession initialSession) {
-    this(SessionMetadata.from(initialSession), channel);
+    this(channel, initialSession, () -> {});
+  }
+
+  PubSubApiTransport(
+      ManagedChannel channel, SalesforceSession initialSession, Runnable beforeRpcStart) {
+    this(channel, initialSession, beforeRpcStart, () -> {});
+  }
+
+  PubSubApiTransport(
+      ManagedChannel channel,
+      SalesforceSession initialSession,
+      Runnable beforeRpcStart,
+      Runnable afterRpcStart) {
+    this(SessionMetadata.from(initialSession), channel, beforeRpcStart, afterRpcStart);
   }
 
   private PubSubApiTransport(SessionMetadata initialSession, ManagedChannel channel) {
+    this(initialSession, channel, () -> {});
+  }
+
+  private PubSubApiTransport(
+      SessionMetadata initialSession, ManagedChannel channel, Runnable beforeRpcStart) {
+    this(initialSession, channel, beforeRpcStart, () -> {});
+  }
+
+  private PubSubApiTransport(
+      SessionMetadata initialSession,
+      ManagedChannel channel,
+      Runnable beforeRpcStart,
+      Runnable afterRpcStart) {
     this.channel = Objects.requireNonNull(channel, "channel");
     this.asyncStub = PubSubGrpc.newStub(channel);
     this.session = new AtomicReference<>(initialSession);
+    this.beforeRpcStart = Objects.requireNonNull(beforeRpcStart, "before RPC start");
+    this.afterRpcStart = Objects.requireNonNull(afterRpcStart, "after RPC start");
   }
 
+  /**
+   * {@inheritDoc} The returned future's {@link CompletableFuture#cancel(boolean)} cancels the RPC.
+   */
   @Override
   public CompletableFuture<TopicMetadata> getTopic(String topicName) {
     if (topicName == null) {
@@ -89,9 +126,13 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
     TopicRequest request = TopicRequest.newBuilder().setTopicName(topicName).build();
     return invokeUnary(
-        (stub, observer) -> stub.getTopic(request, observer), PubSubApiTransport::mapTopic);
+            (stub, observer) -> stub.getTopic(request, observer), PubSubApiTransport::mapTopic)
+        .readOnlyStage();
   }
 
+  /**
+   * {@inheritDoc} The returned future's {@link CompletableFuture#cancel(boolean)} cancels the RPC.
+   */
   @Override
   public CompletableFuture<SchemaMetadata> getSchema(String schemaId) {
     if (schemaId == null) {
@@ -99,7 +140,8 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
     SchemaRequest request = SchemaRequest.newBuilder().setSchemaId(schemaId).build();
     return invokeUnary(
-        (stub, observer) -> stub.getSchema(request, observer), PubSubApiTransport::mapSchema);
+            (stub, observer) -> stub.getSchema(request, observer), PubSubApiTransport::mapSchema)
+        .readOnlyStage();
   }
 
   @Override
@@ -134,55 +176,76 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     channel.shutdownNow();
   }
 
-  CompletableFuture<PublishResponse> publish(PublishRequest request) {
+  CompletionStage<PublishResponse> publish(PublishRequest request) {
     if (request == null || request.getEventsCount() != 1) {
       throw new SalesforcePubSubException(
           "Salesforce Pub/Sub unary Publish requires exactly one event");
     }
-    return invokeUnary((stub, observer) -> stub.publish(request, observer), Function.identity());
+    return this.<PublishResponse, PublishResponse>invokeUnary(
+            (stub, observer) -> stub.publish(request, observer), Function.identity())
+        .readOnlyStage();
   }
 
   SubscriptionRpc subscribe(StreamObserver<FetchResponse> responseObserver) {
     Objects.requireNonNull(responseObserver, "response observer");
     SubscriptionRpc result = new SubscriptionRpc(responseObserver, this::unregister);
-    PubSubGrpc.PubSubStub stub = registerForNewRpc(result);
-    if (result.canStart()) {
-      try {
+    registerForNewRpc(result);
+    try {
+      beforeRpcStart.run();
+      SessionMetadata snapshot = claimRpcStart(result::tryStart);
+      if (snapshot != null) {
+        afterRpcStart.run();
+        PubSubGrpc.PubSubStub stub = credentialedStub(snapshot);
         StreamObserver<FetchRequest> requestObserver = stub.subscribe(result.responseObserver());
         result.attachFallback(requestObserver);
-      } catch (RuntimeException exception) {
-        result.failBeforeStart(exception);
       }
+    } catch (RuntimeException exception) {
+      result.failBeforeStart(exception);
     }
     return result;
   }
 
-  private <RawResponseT, ResponseT> CompletableFuture<ResponseT> invokeUnary(
+  private <RawResponseT, ResponseT> CancellableRpcFuture<ResponseT> invokeUnary(
       BiConsumer<PubSubGrpc.PubSubStub, StreamObserver<RawResponseT>> invocation,
       Function<RawResponseT, ResponseT> responseMapper) {
     Objects.requireNonNull(invocation, "RPC invocation");
     Objects.requireNonNull(responseMapper, "response mapper");
     CancellableRpcFuture<ResponseT> result = new CancellableRpcFuture<>(this::unregister);
-    PubSubGrpc.PubSubStub stub = registerForNewRpc(result);
-    if (result.canStart()) {
-      try {
+    registerForNewRpc(result);
+    try {
+      beforeRpcStart.run();
+      SessionMetadata snapshot = claimRpcStart(result::tryStart);
+      if (snapshot != null) {
+        afterRpcStart.run();
+        PubSubGrpc.PubSubStub stub = credentialedStub(snapshot);
         invocation.accept(stub, new UnaryResponseObserver<>(result, responseMapper));
-      } catch (RuntimeException exception) {
-        result.fail(exception);
       }
+    } catch (RuntimeException exception) {
+      result.fail(exception);
     }
     return result;
   }
 
-  private PubSubGrpc.PubSubStub registerForNewRpc(ActiveOperation operation) {
+  private void registerForNewRpc(ActiveOperation operation) {
     synchronized (lifecycleLock) {
       if (closed.get()) {
         throw new IllegalStateException("Salesforce Pub/Sub transport is closed");
       }
       activeOperations.add(operation);
-      SessionMetadata snapshot = session.get();
-      return asyncStub.withCallCredentials(new SalesforceCallCredentials(snapshot));
     }
+  }
+
+  private SessionMetadata claimRpcStart(BooleanSupplier transition) {
+    synchronized (lifecycleLock) {
+      if (closed.get() || !transition.getAsBoolean()) {
+        return null;
+      }
+      return session.get();
+    }
+  }
+
+  private PubSubGrpc.PubSubStub credentialedStub(SessionMetadata snapshot) {
+    return asyncStub.withCallCredentials(new SalesforceCallCredentials(snapshot));
   }
 
   private void unregister(ActiveOperation operation) {
@@ -198,9 +261,16 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
   private static ManagedChannel newSecureChannel(EndpointConfig endpoint) {
     EndpointConfig validated = Objects.requireNonNull(endpoint, "endpoint");
-    return NettyChannelBuilder.forAddress(validated.host(), validated.port())
+    return NettyChannelBuilder.forAddress(channelHost(validated.host()), validated.port())
         .useTransportSecurity()
         .build();
+  }
+
+  static String channelHost(String host) {
+    if (host.startsWith("[") && host.endsWith("]")) {
+      return host.substring(1, host.length() - 1);
+    }
+    return host;
   }
 
   private static TopicMetadata mapTopic(TopicInfo response) {
@@ -282,12 +352,13 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     private final AtomicReference<ClientCallStreamObserver<?>> requestStream =
         new AtomicReference<>();
-    private final AtomicReference<RpcState> state = new AtomicReference<>(RpcState.ACTIVE);
+    private final AtomicReference<RpcState> state = new AtomicReference<>(RpcState.RESERVED);
     private final Consumer<ActiveOperation> onTerminal;
     private final AtomicBoolean terminalNotified = new AtomicBoolean();
 
     CancellableRpcFuture() {
       this(ignored -> {});
+      state.set(RpcState.ACTIVE);
     }
 
     private CancellableRpcFuture(Consumer<ActiveOperation> onTerminal) {
@@ -314,24 +385,27 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     @Override
     public boolean cancel(boolean mayInterruptIfRunning) {
-      if (!state.compareAndSet(RpcState.ACTIVE, RpcState.CANCELLED)) {
+      if (!cancelState()) {
         return false;
       }
       notifyTerminal();
-      boolean cancelled = super.cancel(mayInterruptIfRunning);
       cancelRequest(requestStream.get());
-      return cancelled;
+      return super.cancel(mayInterruptIfRunning);
     }
 
     @Override
     public void closeFromTransport() {
-      if (state.compareAndSet(RpcState.ACTIVE, RpcState.CANCELLED)) {
+      if (cancelState()) {
         CompletableFuture.runAsync(this::cancelCompletionFromTransport);
       }
     }
 
-    private boolean canStart() {
-      return state.get() == RpcState.ACTIVE;
+    private boolean tryStart() {
+      return state.compareAndSet(RpcState.RESERVED, RpcState.ACTIVE);
+    }
+
+    private CompletableFuture<ResponseT> readOnlyStage() {
+      return new CancellableStage<>(this);
     }
 
     private void attach(ClientCallStreamObserver<?> stream) {
@@ -345,11 +419,11 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     private void fail(Throwable failure) {
-      completeExceptionally(sanitize(failure));
+      failInternal(failure);
     }
 
     private void failAndCancel(Throwable failure, String reason) {
-      if (completeExceptionally(sanitize(failure))) {
+      if (failInternal(failure)) {
         ClientCallStreamObserver<?> stream = requestStream.get();
         if (stream != null) {
           stream.cancel(reason, null);
@@ -376,6 +450,109 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private void cancelCompletionFromTransport() {
       super.cancel(false);
     }
+
+    private boolean failInternal(Throwable failure) {
+      if (!terminateState()) {
+        return false;
+      }
+      notifyTerminal();
+      return super.completeExceptionally(sanitize(failure));
+    }
+
+    private boolean terminateState() {
+      while (true) {
+        RpcState current = state.get();
+        if (current == RpcState.CANCELLED || current == RpcState.TERMINATED) {
+          return false;
+        }
+        if (state.compareAndSet(current, RpcState.TERMINATED)) {
+          return true;
+        }
+      }
+    }
+
+    private boolean cancelState() {
+      while (true) {
+        RpcState current = state.get();
+        if (current == RpcState.CANCELLED || current == RpcState.TERMINATED) {
+          return false;
+        }
+        if (state.compareAndSet(current, RpcState.CANCELLED)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  private static final class CancellableStage<ResponseT> extends CompletableFuture<ResponseT> {
+
+    private final CancellableRpcFuture<ResponseT> source;
+
+    private CancellableStage(CancellableRpcFuture<ResponseT> source) {
+      this.source = source;
+      source.whenComplete(
+          (response, failure) -> {
+            if (failure == null) {
+              super.complete(response);
+            } else if (source.isCancelled()) {
+              super.cancel(false);
+            } else {
+              super.completeExceptionally(failure);
+            }
+          });
+    }
+
+    @Override
+    public boolean complete(ResponseT value) {
+      return false;
+    }
+
+    @Override
+    public boolean completeExceptionally(Throwable failure) {
+      return false;
+    }
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+      return source.cancel(mayInterruptIfRunning);
+    }
+
+    @Override
+    public void obtrudeValue(ResponseT value) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public void obtrudeException(Throwable failure) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public CompletableFuture<ResponseT> completeAsync(
+        Supplier<? extends ResponseT> supplier, Executor executor) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public CompletableFuture<ResponseT> completeAsync(Supplier<? extends ResponseT> supplier) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public CompletableFuture<ResponseT> orTimeout(
+        long timeout, java.util.concurrent.TimeUnit unit) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public CompletableFuture<ResponseT> completeOnTimeout(
+        ResponseT value, long timeout, java.util.concurrent.TimeUnit unit) {
+      throw readOnlyFailure();
+    }
+
+    private static UnsupportedOperationException readOnlyFailure() {
+      return new UnsupportedOperationException("Salesforce RPC stage is read-only");
+    }
   }
 
   static final class SubscriptionRpc implements ActiveOperation {
@@ -386,8 +563,9 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private final AtomicBoolean terminalNotified = new AtomicBoolean();
     private final AtomicBoolean callbackActive = new AtomicBoolean();
     private final AtomicReference<StreamObserver<FetchRequest>> requests = new AtomicReference<>();
+    private final AtomicReference<OutboundPermit> outboundPermit = new AtomicReference<>();
     private final AtomicReference<SubscriptionState> state =
-        new AtomicReference<>(SubscriptionState.STARTING);
+        new AtomicReference<>(SubscriptionState.RESERVED);
 
     private SubscriptionRpc(
         StreamObserver<FetchResponse> downstream, Consumer<ActiveOperation> onTerminal) {
@@ -397,12 +575,15 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     SubscriptionRpc(StreamObserver<FetchResponse> downstream) {
       this(downstream, ignored -> {});
+      state.set(SubscriptionState.STARTING);
     }
 
     void send(FetchRequest request) {
       Objects.requireNonNull(request, "fetch request");
       StreamObserver<FetchRequest> requestObserver = requireRequestObserver();
+      OutboundPermit outbound = reserveOutbound();
       if (!state.compareAndSet(SubscriptionState.ACTIVE, SubscriptionState.SENDING)) {
+        releaseOutbound(outbound);
         throw inactiveSubscription();
       }
       try {
@@ -412,12 +593,15 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         throw sanitize(exception);
       } finally {
         state.compareAndSet(SubscriptionState.SENDING, SubscriptionState.ACTIVE);
+        releaseOutbound(outbound);
       }
     }
 
     void complete() {
       StreamObserver<FetchRequest> requestObserver = requireRequestObserver();
+      OutboundPermit outbound = reserveOutbound();
       if (!state.compareAndSet(SubscriptionState.ACTIVE, SubscriptionState.HALF_CLOSING)) {
+        releaseOutbound(outbound);
         throw inactiveSubscription();
       }
       try {
@@ -428,30 +612,31 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         }
       } finally {
         state.compareAndSet(SubscriptionState.HALF_CLOSING, SubscriptionState.HALF_CLOSED);
+        releaseOutbound(outbound);
       }
     }
 
     void cancel() {
-      if (!cancelState()) {
+      if (!cancelState(true)) {
         return;
       }
       notifyTerminal();
-      completion.cancel(false);
       StreamObserver<FetchRequest> requestObserver = requests.get();
       if (requestObserver instanceof ClientCallStreamObserver<?> clientStream) {
         cancelClientStream(clientStream, "RPC cancelled");
       }
+      CompletableFuture.runAsync(() -> completion.cancel(false));
     }
 
     @Override
     public void closeFromTransport() {
-      if (cancelState()) {
+      if (cancelState(false)) {
         CompletableFuture.runAsync(() -> completion.cancel(false));
       }
     }
 
-    private boolean canStart() {
-      return isLive(state.get());
+    private boolean tryStart() {
+      return state.compareAndSet(SubscriptionState.RESERVED, SubscriptionState.STARTING);
     }
 
     java.util.concurrent.CompletionStage<Void> completion() {
@@ -530,16 +715,39 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       return requestObserver;
     }
 
-    private boolean cancelState() {
+    private boolean cancelState(boolean waitForOutbound) {
       while (true) {
         SubscriptionState current = state.get();
         if (current == SubscriptionState.CANCELLED || current == SubscriptionState.TERMINATED) {
           return false;
         }
+        if (waitForOutbound
+            && (current == SubscriptionState.SENDING
+                || current == SubscriptionState.HALF_CLOSING)) {
+          OutboundPermit outbound = outboundPermit.get();
+          if (outbound != null && outbound.owner() != Thread.currentThread()) {
+            outbound.completion().join();
+            continue;
+          }
+        }
         if (state.compareAndSet(current, SubscriptionState.CANCELLED)) {
           return true;
         }
       }
+    }
+
+    private OutboundPermit reserveOutbound() {
+      OutboundPermit outbound =
+          new OutboundPermit(Thread.currentThread(), new CompletableFuture<>());
+      if (!outboundPermit.compareAndSet(null, outbound)) {
+        throw inactiveSubscription();
+      }
+      return outbound;
+    }
+
+    private void releaseOutbound(OutboundPermit outbound) {
+      outboundPermit.compareAndSet(outbound, null);
+      outbound.completion().complete(null);
     }
 
     private boolean terminateState() {
@@ -622,7 +830,10 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
   }
 
+  private record OutboundPermit(Thread owner, CompletableFuture<Void> completion) {}
+
   private enum SubscriptionState {
+    RESERVED,
     STARTING,
     ACTIVE,
     SENDING,
@@ -633,6 +844,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
   }
 
   private enum RpcState {
+    RESERVED,
     ACTIVE,
     CANCELLED,
     TERMINATED
