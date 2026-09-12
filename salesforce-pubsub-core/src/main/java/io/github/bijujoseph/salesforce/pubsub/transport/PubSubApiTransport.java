@@ -258,7 +258,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     Objects.requireNonNull(responseObserver, "response observer");
     SubscriptionRpc result =
         new SubscriptionRpc(
-            responseObserver, this::unregister, this::reportFailure, this::reportConnected);
+            responseObserver, this::unregister, this::reportFailure, this::reportSubscribed);
     registerForNewRpc(result);
     try {
       beforeRpcStart.run();
@@ -416,7 +416,15 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
   }
 
   private void reportConnected() {
-    transitionHealth(ConnectorStatus.CONNECTED);
+    if (health != null) {
+      health.connectionSucceeded();
+    }
+  }
+
+  private void reportSubscribed(String topic) {
+    if (health != null) {
+      health.subscriptionSucceeded(topic);
+    }
   }
 
   private void transitionHealth(ConnectorStatus status) {
@@ -867,13 +875,14 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private final CompletableFuture<Void> completion = new CompletableFuture<>();
     private final Consumer<ActiveOperation> onTerminal;
     private final BiConsumer<Status.Code, SalesforcePubSubException> failureReporter;
-    private final Runnable successReporter;
+    private final Consumer<String> successReporter;
     private final AtomicBoolean terminalNotified = new AtomicBoolean();
-    private final AtomicBoolean connectedReported = new AtomicBoolean();
+    private final AtomicBoolean subscriptionReported = new AtomicBoolean();
     private final AtomicBoolean callbackActive = new AtomicBoolean();
     private final AtomicReference<StreamObserver<FetchRequest>> requests = new AtomicReference<>();
     private final AtomicReference<ClientCall<?, ?>> clientCall = new AtomicReference<>();
     private final AtomicReference<OutboundPermit> outboundPermit = new AtomicReference<>();
+    private final AtomicReference<String> topic = new AtomicReference<>();
     private final AtomicReference<SubscriptionState> state =
         new AtomicReference<>(SubscriptionState.RESERVED);
 
@@ -881,7 +890,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         StreamObserver<FetchResponse> downstream,
         Consumer<ActiveOperation> onTerminal,
         BiConsumer<Status.Code, SalesforcePubSubException> failureReporter,
-        Runnable successReporter) {
+        Consumer<String> successReporter) {
       this.downstream = Objects.requireNonNull(downstream, "downstream observer");
       this.onTerminal = Objects.requireNonNull(onTerminal, "terminal callback");
       this.failureReporter = Objects.requireNonNull(failureReporter, "failure reporter");
@@ -889,7 +898,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     SubscriptionRpc(StreamObserver<FetchResponse> downstream) {
-      this(downstream, ignored -> {}, (ignoredCode, ignoredFailure) -> {}, () -> {});
+      this(downstream, ignored -> {}, (ignoredCode, ignoredFailure) -> {}, ignoredTopic -> {});
       state.set(SubscriptionState.STARTING);
     }
 
@@ -902,6 +911,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         throw inactiveSubscription();
       }
       try {
+        captureTopic(request.getTopicName());
         requestObserver.onNext(request);
       } catch (RuntimeException exception) {
         SalesforcePubSubException sanitized = failOutbound(SubscriptionState.SENDING, exception);
@@ -1142,13 +1152,23 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     private void notifySuccess() {
-      if (!connectedReported.compareAndSet(false, true)) {
+      String subscriptionTopic = topic.get();
+      if (subscriptionTopic == null) {
+        return;
+      }
+      if (!subscriptionReported.compareAndSet(false, true)) {
         return;
       }
       try {
-        successReporter.run();
+        successReporter.accept(subscriptionTopic);
       } catch (RuntimeException ignored) {
         // Diagnostics must never alter subscription callbacks.
+      }
+    }
+
+    private void captureTopic(String candidate) {
+      if (candidate != null && !candidate.isEmpty()) {
+        topic.compareAndSet(null, candidate);
       }
     }
 

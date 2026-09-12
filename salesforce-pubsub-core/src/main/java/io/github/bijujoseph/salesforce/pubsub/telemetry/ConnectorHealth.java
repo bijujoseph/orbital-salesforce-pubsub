@@ -82,6 +82,26 @@ public final class ConnectorHealth {
     }
   }
 
+  /** Publishes a successful unary connection without downgrading an active subscription. */
+  public synchronized boolean connectionSucceeded() {
+    if (status.get() == ConnectorStatus.SUBSCRIBED) {
+      return false;
+    }
+    return transitionTo(ConnectorStatus.CONNECTED);
+  }
+
+  /** Publishes the successful establishment of one subscription. */
+  public synchronized boolean subscriptionSucceeded(String topic) {
+    boolean transitioned = transitionTo(ConnectorStatus.SUBSCRIBED);
+    if (!transitioned && status.get() != ConnectorStatus.SUBSCRIBED) {
+      return false;
+    }
+    publishTelemetry(
+        () -> telemetry.subscriptionState(connectionName, topic, ConnectorStatus.SUBSCRIBED));
+    publishTelemetry(() -> telemetry.subscribed(connectionName, topic, null));
+    return true;
+  }
+
   private void publish(ConnectorStatus next) {
     publishTelemetry(() -> telemetry.connectionState(connectionName, next));
     if (next == ConnectorStatus.CONNECTED) {

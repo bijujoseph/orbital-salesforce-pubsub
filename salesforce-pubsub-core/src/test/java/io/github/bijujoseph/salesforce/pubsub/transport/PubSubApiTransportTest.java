@@ -529,6 +529,54 @@ class PubSubApiTransportTest {
   }
 
   @Test
+  void firstAcceptedSubscriptionResponsePublishesExactSubscriptionContextOnce() throws Exception {
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    RecordingLogger logger = new RecordingLogger();
+    restartServer(new RespondingService(), health, logger);
+    RecordingObserver<FetchResponse> downstream = new RecordingObserver<>(2);
+    PubSubApiTransport.SubscriptionRpc subscription = transport.subscribe(downstream);
+    FetchRequest request = FetchRequest.newBuilder().setTopicName("/event/Exact_Topic__e").build();
+
+    subscription.send(request);
+    subscription.send(request);
+
+    assertTrue(downstream.nextReceived.await(5, TimeUnit.SECONDS));
+    assertEquals(2, downstream.next.get());
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+    assertEquals(List.of(ConnectorStatus.STARTING, ConnectorStatus.SUBSCRIBED), telemetry.statuses);
+    assertEquals(0, telemetry.connected.get());
+    assertEquals(
+        List.of(
+            new SubscriptionStateObservation(
+                "connection", "/event/Exact_Topic__e", ConnectorStatus.SUBSCRIBED)),
+        telemetry.subscriptionStates);
+    assertEquals(
+        List.of(new SubscribedObservation("connection", "/event/Exact_Topic__e", null)),
+        telemetry.subscriptions);
+
+    transport.getTopic("/event/Exact_Topic__e").get(5, TimeUnit.SECONDS);
+
+    assertEquals(ConnectorStatus.SUBSCRIBED, health.status());
+    assertEquals(0, telemetry.connected.get());
+    assertEquals(1, telemetry.subscriptionStates.size());
+    assertEquals(1, telemetry.subscriptions.size());
+  }
+
+  @Test
+  void terminalHealthBlocksLateSubscriptionSuccessTelemetry() {
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    assertTrue(health.transitionTo(ConnectorStatus.FAILED));
+
+    assertFalse(health.subscriptionSucceeded("/event/Late__e"));
+
+    assertEquals(ConnectorStatus.FAILED, health.status());
+    assertTrue(telemetry.subscriptionStates.isEmpty());
+    assertTrue(telemetry.subscriptions.isEmpty());
+  }
+
+  @Test
   void missingSchemaIdIsATypedLookupFailureBeforeRpcStart() {
     assertInstanceOf(
         SchemaLookupException.class,
@@ -2210,8 +2258,15 @@ class PubSubApiTransportTest {
 
   private record ObservedCall(String method, SessionHeaders headers) {}
 
+  private record SubscriptionStateObservation(
+      String connectionName, String topic, ConnectorStatus status) {}
+
+  private record SubscribedObservation(String connectionName, String topic, String consumerName) {}
+
   private static final class RecordingTelemetry implements SalesforcePubSubTelemetry {
     private final List<ConnectorStatus> statuses = new ArrayList<>();
+    private final List<SubscriptionStateObservation> subscriptionStates = new ArrayList<>();
+    private final List<SubscribedObservation> subscriptions = new ArrayList<>();
     private final AtomicInteger connected = new AtomicInteger();
 
     @Override
@@ -2222,6 +2277,16 @@ class PubSubApiTransportTest {
     @Override
     public void connected(String connectionName) {
       connected.incrementAndGet();
+    }
+
+    @Override
+    public void subscriptionState(String connectionName, String topic, ConnectorStatus status) {
+      subscriptionStates.add(new SubscriptionStateObservation(connectionName, topic, status));
+    }
+
+    @Override
+    public void subscribed(String connectionName, String topic, String consumerName) {
+      subscriptions.add(new SubscribedObservation(connectionName, topic, consumerName));
     }
   }
 
@@ -2453,10 +2518,20 @@ class PubSubApiTransportTest {
     private final AtomicInteger errors = new AtomicInteger();
     private final AtomicInteger completed = new AtomicInteger();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
+    private final CountDownLatch nextReceived;
+
+    private RecordingObserver() {
+      this(0);
+    }
+
+    private RecordingObserver(int expectedResponses) {
+      nextReceived = new CountDownLatch(expectedResponses);
+    }
 
     @Override
     public void onNext(T value) {
       next.incrementAndGet();
+      nextReceived.countDown();
     }
 
     @Override
