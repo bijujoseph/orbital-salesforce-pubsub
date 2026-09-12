@@ -96,6 +96,7 @@ public final class ConnectorHealth {
   /** Publishes the successful establishment of one subscription. */
   public synchronized boolean subscriptionSucceeded(Object subscription, String topic) {
     Objects.requireNonNull(subscription, "subscription");
+    Objects.requireNonNull(topic, "topic");
     if (status.get().terminal() || activeSubscriptions.putIfAbsent(subscription, topic) != null) {
       return false;
     }

@@ -43,6 +43,7 @@ import io.github.bijujoseph.salesforce.pubsub.auth.SalesforceSession;
 import io.github.bijujoseph.salesforce.pubsub.config.EndpointConfig;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
+import io.github.bijujoseph.salesforce.pubsub.error.PublishException;
 import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
 import io.github.bijujoseph.salesforce.pubsub.error.SchemaLookupException;
 import io.github.bijujoseph.salesforce.pubsub.error.SubscriptionException;
@@ -478,6 +479,38 @@ class PubSubApiTransportTest {
     assertEquals("missing-schema", schema.schemaId());
     assertNull(schema.getCause());
     assertSafe(schema.toString());
+  }
+
+  @Test
+  void missingTopicInputsAreRejectedLocallyBeforeHealthLoggingOrRpcStart() throws Exception {
+    RecordingTelemetry telemetry = new RecordingTelemetry();
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    RecordingLogger logger = new RecordingLogger();
+    restartServer(new RespondingService(), health, logger);
+
+    for (String missingTopic : new String[] {null, "", "   ", "\u2003"}) {
+      TopicNotFoundException failure =
+          assertThrows(TopicNotFoundException.class, () -> transport.getTopic(missingTopic));
+      assertNull(failure.getCause());
+    }
+
+    assertEquals(0, receivedCalls.get());
+    assertEquals(ConnectorStatus.STARTING, health.status());
+    assertEquals(List.of(ConnectorStatus.STARTING), telemetry.statuses);
+    assertTrue(logger.events().isEmpty());
+
+    TopicMetadata valid = transport.getTopic("/event/Exact__e").get(5, TimeUnit.SECONDS);
+    assertEquals("/event/Exact__e", valid.topicName());
+    assertEquals(1, receivedCalls.get());
+  }
+
+  @Test
+  void publishRpcFailuresUsePublishCategoryWithoutMaskingAuthCategories() throws Exception {
+    assertPublishFailure(Status.Code.INVALID_ARGUMENT, PublishException.class);
+    assertPublishFailure(Status.Code.NOT_FOUND, PublishException.class);
+    assertPublishFailure(Status.Code.UNAVAILABLE, PublishException.class);
+    assertPublishFailure(Status.Code.UNAUTHENTICATED, AuthenticationException.class);
+    assertPublishFailure(Status.Code.PERMISSION_DENIED, AuthorizationException.class);
   }
 
   @Test
@@ -1813,18 +1846,26 @@ class PubSubApiTransportTest {
   }
 
   @Test
-  void batchAndForbiddenRpcPathsAreNotExposed() {
+  void invalidPublishRequestsUsePublishCategoryWithoutStartingAnRpc() {
     PublishRequest batch =
         PublishRequest.newBuilder()
             .addEvents(ProducerEvent.getDefaultInstance())
             .addEvents(ProducerEvent.getDefaultInstance())
             .build();
 
-    SalesforcePubSubException failure =
-        assertThrows(SalesforcePubSubException.class, () -> transport.publish(batch));
+    PublishException nullFailure =
+        assertThrows(PublishException.class, () -> transport.publish(null));
+    PublishException emptyFailure =
+        assertThrows(
+            PublishException.class, () -> transport.publish(PublishRequest.getDefaultInstance()));
+    PublishException batchFailure =
+        assertThrows(PublishException.class, () -> transport.publish(batch));
 
-    assertEquals(
-        "Salesforce Pub/Sub unary Publish requires exactly one event", failure.getMessage());
+    for (PublishException failure : List.of(nullFailure, emptyFailure, batchFailure)) {
+      assertEquals(
+          "Salesforce Pub/Sub unary Publish requires exactly one event", failure.getMessage());
+      assertNull(failure.getCause());
+    }
     assertEquals(0, receivedCalls.get());
     assertTrue(
         Arrays.stream(PubSubApiTransport.class.getDeclaredMethods())
@@ -1954,6 +1995,22 @@ class PubSubApiTransportTest {
     SalesforcePubSubException failure = assertInstanceOf(expectedType, wrapper.getCause());
     assertNull(failure.getCause());
     assertSafe(failure.toString());
+  }
+
+  private void assertPublishFailure(
+      Status.Code code, Class<? extends SalesforcePubSubException> expectedType) throws Exception {
+    restartServer(new CategorizedFailingService(code));
+    Exception wrapper =
+        assertThrows(
+            Exception.class,
+            () ->
+                transport.publish(singlePublish()).toCompletableFuture().get(5, TimeUnit.SECONDS));
+    SalesforcePubSubException failure = assertInstanceOf(expectedType, wrapper.getCause());
+    assertNull(failure.getCause());
+    assertSafe(failure.toString());
+    if (expectedType == PublishException.class) {
+      assertEquals("Salesforce Pub/Sub publish failed [" + code.name() + "]", failure.getMessage());
+    }
   }
 
   private void assertFailureLog(
@@ -2828,6 +2885,11 @@ class PubSubApiTransportTest {
 
     @Override
     public void getSchema(SchemaRequest request, StreamObserver<SchemaInfo> observer) {
+      observer.onError(failure());
+    }
+
+    @Override
+    public void publish(PublishRequest request, StreamObserver<PublishResponse> observer) {
       observer.onError(failure());
     }
 

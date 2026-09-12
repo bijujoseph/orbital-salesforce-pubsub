@@ -162,6 +162,29 @@ class ConnectorHealthTest {
   }
 
   @Test
+  void nullSubscriptionTopicIsRejectedBeforeStateChangeAndIdentityRemainsReusable() {
+    List<String> topics = new ArrayList<>();
+    SalesforcePubSubTelemetry telemetry =
+        new SalesforcePubSubTelemetry() {
+          @Override
+          public void subscriptionState(
+              String connectionName, String topic, ConnectorStatus status) {
+            topics.add(topic);
+          }
+        };
+    ConnectorHealth health = new ConnectorHealth("connection", telemetry);
+    Object subscription = new Object();
+
+    assertThrows(
+        NullPointerException.class, () -> health.subscriptionSucceeded(subscription, null));
+
+    assertEquals(ConnectorStatus.STARTING, health.status());
+    assertTrue(topics.isEmpty());
+    assertTrue(health.subscriptionSucceeded(subscription, "/event/Test__e"));
+    assertEquals(List.of("/event/Test__e"), topics);
+  }
+
+  @Test
   void concurrentTransitionsPublishInStateOrderWithoutStaleTelemetry() throws Exception {
     CountDownLatch authenticatingPublished = new CountDownLatch(1);
     CountDownLatch releaseAuthentication = new CountDownLatch(1);

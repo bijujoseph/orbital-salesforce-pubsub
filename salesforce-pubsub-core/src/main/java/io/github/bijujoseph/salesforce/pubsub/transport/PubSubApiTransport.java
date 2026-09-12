@@ -29,6 +29,7 @@ import io.github.bijujoseph.salesforce.pubsub.auth.SalesforceSession;
 import io.github.bijujoseph.salesforce.pubsub.config.EndpointConfig;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
+import io.github.bijujoseph.salesforce.pubsub.error.PublishException;
 import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
 import io.github.bijujoseph.salesforce.pubsub.error.SchemaLookupException;
 import io.github.bijujoseph.salesforce.pubsub.error.SubscriptionException;
@@ -180,7 +181,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
    */
   @Override
   public CompletableFuture<TopicMetadata> getTopic(String topicName) {
-    if (topicName == null) {
+    if (topicName == null || topicName.isBlank()) {
       throw new TopicNotFoundException(null);
     }
     TopicRequest request = TopicRequest.newBuilder().setTopicName(topicName).build();
@@ -244,13 +245,12 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
   CompletionStage<PublishResponse> publish(PublishRequest request) {
     if (request == null || request.getEventsCount() != 1) {
-      throw new SalesforcePubSubException(
-          "Salesforce Pub/Sub unary Publish requires exactly one event");
+      throw new PublishException("Salesforce Pub/Sub unary Publish requires exactly one event");
     }
     return this.<PublishResponse, PublishResponse>invokeUnary(
             (stub, observer) -> stub.publish(request, observer),
             Function.identity(),
-            FailureContext.none())
+            FailureContext.publish())
         .readOnlyStage();
   }
 
@@ -379,8 +379,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
           new AuthenticationException("Salesforce Pub/Sub authentication failed [UNAUTHENTICATED]");
       case PERMISSION_DENIED ->
           new AuthorizationException("Salesforce Pub/Sub authorization failed [PERMISSION_DENIED]");
-      case NOT_FOUND -> failureContext.notFoundException();
-      default -> new TransportException(code);
+      default -> failureContext.exception(code);
     };
   }
 
@@ -1402,18 +1401,30 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       return new FailureContext(Resource.SCHEMA, schemaId);
     }
 
-    private SalesforcePubSubException notFoundException() {
-      return switch (resource) {
-        case TOPIC -> new TopicNotFoundException(identifier);
-        case SCHEMA -> new SchemaLookupException(identifier);
-        case NONE -> new TransportException(Status.Code.NOT_FOUND);
-      };
+    private static FailureContext publish() {
+      return new FailureContext(Resource.PUBLISH, null);
+    }
+
+    private SalesforcePubSubException exception(Status.Code code) {
+      if (resource == Resource.PUBLISH) {
+        return new PublishException("Salesforce Pub/Sub publish failed [" + code.name() + "]");
+      }
+      if (code == Status.Code.NOT_FOUND) {
+        return switch (resource) {
+          case TOPIC -> new TopicNotFoundException(identifier);
+          case SCHEMA -> new SchemaLookupException(identifier);
+          case NONE -> new TransportException(code);
+          case PUBLISH -> throw new IllegalStateException("Unexpected failure context");
+        };
+      }
+      return new TransportException(code);
     }
   }
 
   private enum Resource {
     NONE,
     TOPIC,
-    SCHEMA
+    SCHEMA,
+    PUBLISH
   }
 }
