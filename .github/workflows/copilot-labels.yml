@@ -9,7 +9,21 @@ jobs:
     if: contains(github.event.requested_reviewer.login, 'copilot')
     runs-on: ubuntu-latest
     steps:
-      - run: gh pr edit "$PR_URL" --add-label "copilot-reviewing"
+      - run: |
+          set -euo pipefail
+
+          current_labels=$(gh pr view "$PR_URL" --json labels --jq '[.labels[].name] | join(",")')
+          args=(--add-label "copilot-reviewing")
+
+          if [[ ",$current_labels," == *",copilot-approved,"* ]]; then
+            args+=(--remove-label "copilot-approved")
+          fi
+
+          if [[ ",$current_labels," == *",copilot-changes-requested,"* ]]; then
+            args+=(--remove-label "copilot-changes-requested")
+          fi
+
+          gh pr edit "$PR_URL" "${args[@]}"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
