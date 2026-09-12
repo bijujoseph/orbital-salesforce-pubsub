@@ -16,6 +16,7 @@
 
 package io.github.bijujoseph.salesforce.pubsub.transport;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -481,6 +482,76 @@ class PubSubApiTransportTest {
     } finally {
       failingTransport.close();
     }
+  }
+
+  @Test
+  void synchronousUnaryStartFailureCancelsThePartialCallAndPreservesSanitizedFailure()
+      throws Exception {
+    FailingStartManagedChannel failingChannel = new FailingStartManagedChannel(true);
+    PubSubApiTransport failingTransport = new PubSubApiTransport(failingChannel, session(0));
+    try {
+      CompletableFuture<TopicMetadata> response = failingTransport.getTopic("failure");
+
+      Exception wrapper = assertThrows(Exception.class, () -> response.get(5, TimeUnit.SECONDS));
+      SalesforcePubSubException failure =
+          assertInstanceOf(SalesforcePubSubException.class, wrapper.getCause());
+      assertEquals("Salesforce Pub/Sub RPC failed [UNKNOWN]", failure.getMessage());
+      assertEquals(1, failingChannel.starts.get());
+      assertEquals(1, failingChannel.cancels.get());
+      assertSafe(wrapper.toString());
+      assertSafe(failure.toString());
+    } finally {
+      failingTransport.close();
+    }
+  }
+
+  @Test
+  void synchronousSubscriptionStartFailureCancelsThePartialCall() throws Exception {
+    FailingStartManagedChannel failingChannel = new FailingStartManagedChannel(false);
+    PubSubApiTransport failingTransport = new PubSubApiTransport(failingChannel, session(0));
+    RecordingObserver<FetchResponse> downstream = new RecordingObserver<>();
+    try {
+      PubSubApiTransport.SubscriptionRpc subscription = failingTransport.subscribe(downstream);
+
+      Exception failure =
+          assertThrows(
+              Exception.class,
+              () -> subscription.completion().toCompletableFuture().get(5, TimeUnit.SECONDS));
+      assertEquals(1, failingChannel.starts.get());
+      assertEquals(1, failingChannel.cancels.get());
+      assertEquals(1, downstream.errors.get());
+      assertSafe(failure.toString());
+      assertSafe(failure.getCause().toString());
+    } finally {
+      failingTransport.close();
+    }
+  }
+
+  @Test
+  void unaryCleanupFailuresCannotEscapeOrReplaceTheSanitizedFailure() {
+    PubSubApiTransport.CancellableRpcFuture<String> result =
+        new PubSubApiTransport.CancellableRpcFuture<>();
+    ThrowingCancelClientCall<String, String> call = new ThrowingCancelClientCall<>();
+    ThrowingClientRequestObserver<Object> stream =
+        new ThrowingClientRequestObserver<>(true, false, true);
+    PubSubApiTransport.UnaryResponseObserver<String, String> observer =
+        new PubSubApiTransport.UnaryResponseObserver<>(
+            result,
+            ignored -> {
+              throw Status.INTERNAL
+                  .withDescription("server-sentinel token-0 instance-0 tenant-0")
+                  .asRuntimeException();
+            });
+    result.attachClientCall(call);
+    observer.beforeStart(stream);
+
+    assertDoesNotThrow(() -> observer.onNext("invalid"));
+
+    Exception failure = assertThrows(Exception.class, result::join);
+    assertEquals(1, call.cancels.get());
+    assertEquals(1, stream.cancels.get());
+    assertEquals("Salesforce Pub/Sub RPC failed [INTERNAL]", failure.getCause().getMessage());
+    assertSafe(failure.toString());
   }
 
   @Test
@@ -1011,6 +1082,75 @@ class PubSubApiTransportTest {
         executor.shutdownNow();
         assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
       }
+    }
+  }
+
+  @Test
+  void outboundFailuresCancelTheSubscriptionCallAndRequestStream() {
+    for (boolean failSend : List.of(true, false)) {
+      RecordingObserver<FetchResponse> downstream = new RecordingObserver<>();
+      PubSubApiTransport.SubscriptionRpc subscription =
+          new PubSubApiTransport.SubscriptionRpc(downstream);
+      ThrowingCancelClientCall<FetchRequest, FetchResponse> call = new ThrowingCancelClientCall<>();
+      ThrowingClientRequestObserver<FetchRequest> stream =
+          new ThrowingClientRequestObserver<>(failSend, !failSend, true);
+      subscription.attachClientCall(call);
+      subscription.attachFallback(stream);
+
+      SalesforcePubSubException failure =
+          assertThrows(
+              SalesforcePubSubException.class,
+              () -> {
+                if (failSend) {
+                  subscription.send(FetchRequest.getDefaultInstance());
+                } else {
+                  subscription.complete();
+                }
+              });
+
+      assertEquals(1, call.cancels.get());
+      assertEquals(1, stream.cancels.get());
+      assertEquals(1, downstream.errors.get());
+      assertSafe(failure.toString());
+      assertSanitizedExceptionalCompletion(subscription);
+    }
+  }
+
+  @Test
+  void outboundCallsDuringSynchronousClientStartAreRejectedInsteadOfDropped() throws Exception {
+    BlockingStartClientCall<String, String> delegate = new BlockingStartClientCall<>();
+    PubSubApiTransport.OperationClientCall<String, String> call =
+        new PubSubApiTransport.OperationClientCall<>(delegate);
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<?> start =
+          executor.submit(() -> call.start(new ClientCall.Listener<>() {}, new Metadata()));
+      assertTrue(delegate.startEntered.await(5, TimeUnit.SECONDS));
+
+      IllegalStateException sendFailure =
+          assertThrows(IllegalStateException.class, () -> call.sendMessage("early"));
+      assertThrows(IllegalStateException.class, () -> call.request(1));
+      assertThrows(IllegalStateException.class, call::halfClose);
+      assertThrows(IllegalStateException.class, () -> call.setMessageCompression(true));
+      assertSafe(sendFailure.toString());
+      assertEquals(0, delegate.sends.get());
+      assertEquals(0, delegate.requests.get());
+      assertEquals(0, delegate.halfCloses.get());
+
+      delegate.releaseStart.countDown();
+      start.get(5, TimeUnit.SECONDS);
+      call.request(1);
+      call.sendMessage("started");
+      call.halfClose();
+      call.setMessageCompression(true);
+      assertEquals(1, delegate.requests.get());
+      assertEquals(1, delegate.sends.get());
+      assertEquals(1, delegate.halfCloses.get());
+      assertEquals(1, delegate.compressions.get());
+    } finally {
+      delegate.releaseStart.countDown();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
     }
   }
 
@@ -2031,6 +2171,128 @@ class PubSubApiTransportTest {
     }
   }
 
+  private static final class ThrowingClientRequestObserver<RequestT>
+      extends ClientCallStreamObserver<RequestT> {
+
+    private final boolean throwOnNext;
+    private final boolean throwOnCompleted;
+    private final boolean throwOnCancel;
+    private final AtomicInteger cancels = new AtomicInteger();
+
+    private ThrowingClientRequestObserver(
+        boolean throwOnNext, boolean throwOnCompleted, boolean throwOnCancel) {
+      this.throwOnNext = throwOnNext;
+      this.throwOnCompleted = throwOnCompleted;
+      this.throwOnCancel = throwOnCancel;
+    }
+
+    @Override
+    public void cancel(String message, Throwable cause) {
+      cancels.incrementAndGet();
+      if (throwOnCancel) {
+        throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+      }
+    }
+
+    @Override
+    public boolean isReady() {
+      return true;
+    }
+
+    @Override
+    public void setOnReadyHandler(Runnable handler) {}
+
+    @Override
+    public void disableAutoInboundFlowControl() {}
+
+    @Override
+    public void request(int count) {}
+
+    @Override
+    public void setMessageCompression(boolean enabled) {}
+
+    @Override
+    public void onNext(RequestT request) {
+      if (throwOnNext) {
+        throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+      }
+    }
+
+    @Override
+    public void onError(Throwable failure) {}
+
+    @Override
+    public void onCompleted() {
+      if (throwOnCompleted) {
+        throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+      }
+    }
+  }
+
+  private static final class ThrowingCancelClientCall<RequestT, ResponseT>
+      extends ClientCall<RequestT, ResponseT> {
+
+    private final AtomicInteger cancels = new AtomicInteger();
+
+    @Override
+    public void start(Listener<ResponseT> responseListener, Metadata headers) {}
+
+    @Override
+    public void request(int count) {}
+
+    @Override
+    public void cancel(String message, Throwable cause) {
+      cancels.incrementAndGet();
+      throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+    }
+
+    @Override
+    public void halfClose() {}
+
+    @Override
+    public void sendMessage(RequestT message) {}
+  }
+
+  private static final class BlockingStartClientCall<RequestT, ResponseT>
+      extends ClientCall<RequestT, ResponseT> {
+
+    private final CountDownLatch startEntered = new CountDownLatch(1);
+    private final CountDownLatch releaseStart = new CountDownLatch(1);
+    private final AtomicInteger requests = new AtomicInteger();
+    private final AtomicInteger sends = new AtomicInteger();
+    private final AtomicInteger halfCloses = new AtomicInteger();
+    private final AtomicInteger compressions = new AtomicInteger();
+
+    @Override
+    public void start(Listener<ResponseT> responseListener, Metadata headers) {
+      startEntered.countDown();
+      await(releaseStart);
+    }
+
+    @Override
+    public void request(int count) {
+      requests.incrementAndGet();
+    }
+
+    @Override
+    public void cancel(String message, Throwable cause) {}
+
+    @Override
+    public void halfClose() {
+      halfCloses.incrementAndGet();
+    }
+
+    @Override
+    public void sendMessage(RequestT message) {
+      sends.incrementAndGet();
+    }
+
+    @Override
+    public void setMessageCompression(boolean enabled) {
+      compressions.incrementAndGet();
+    }
+  }
+
   private static final class ThrowingObserver implements StreamObserver<FetchResponse> {
 
     private final boolean throwOnNext;
@@ -2158,6 +2420,78 @@ class PubSubApiTransportTest {
     public <RequestT, ResponseT> ClientCall<RequestT, ResponseT> newCall(
         MethodDescriptor<RequestT, ResponseT> method, CallOptions callOptions) {
       throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+    }
+
+    @Override
+    public String authority() {
+      return "safe-authority";
+    }
+  }
+
+  private static final class FailingStartManagedChannel extends ManagedChannel {
+
+    private final boolean throwOnCancel;
+    private final AtomicInteger starts = new AtomicInteger();
+    private final AtomicInteger cancels = new AtomicInteger();
+    private volatile boolean shutdown;
+
+    private FailingStartManagedChannel(boolean throwOnCancel) {
+      this.throwOnCancel = throwOnCancel;
+    }
+
+    @Override
+    public ManagedChannel shutdown() {
+      shutdown = true;
+      return this;
+    }
+
+    @Override
+    public boolean isShutdown() {
+      return shutdown;
+    }
+
+    @Override
+    public boolean isTerminated() {
+      return shutdown;
+    }
+
+    @Override
+    public ManagedChannel shutdownNow() {
+      return shutdown();
+    }
+
+    @Override
+    public boolean awaitTermination(long timeout, TimeUnit unit) {
+      return shutdown;
+    }
+
+    @Override
+    public <RequestT, ResponseT> ClientCall<RequestT, ResponseT> newCall(
+        MethodDescriptor<RequestT, ResponseT> method, CallOptions callOptions) {
+      return new ClientCall<>() {
+        @Override
+        public void start(Listener<ResponseT> responseListener, Metadata headers) {
+          starts.incrementAndGet();
+          throw new IllegalStateException("server-sentinel token-0 instance-0 tenant-0");
+        }
+
+        @Override
+        public void request(int count) {}
+
+        @Override
+        public void cancel(String message, Throwable cause) {
+          cancels.incrementAndGet();
+          if (throwOnCancel) {
+            throw new IllegalStateException("cleanup-sentinel token-0 instance-0 tenant-0");
+          }
+        }
+
+        @Override
+        public void halfClose() {}
+
+        @Override
+        public void sendMessage(RequestT message) {}
+      };
     }
 
     @Override

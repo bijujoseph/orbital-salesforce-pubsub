@@ -224,7 +224,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         invocation.accept(stub, new UnaryResponseObserver<>(result, responseMapper));
       }
     } catch (RuntimeException exception) {
-      result.fail(exception);
+      result.failAndCancel(exception, "RPC invocation failed");
     }
     return result;
   }
@@ -427,7 +427,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     private void attach(ClientCallStreamObserver<?> stream) {
       if (!requestStream.compareAndSet(null, stream)) {
-        stream.cancel("Duplicate RPC stream", null);
+        cancelRequest(stream, "Duplicate RPC stream");
         return;
       }
       if (state.get() == RpcState.CANCELLED) {
@@ -440,19 +440,24 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
 
     private void failAndCancel(Throwable failure, String reason) {
-      if (failInternal(failure)) {
-        cancelClientCall(clientCall.get());
-        ClientCallStreamObserver<?> stream = requestStream.get();
-        if (stream != null) {
-          stream.cancel(reason, null);
-        }
+      if (!terminateState()) {
+        return;
       }
+      RpcFailure sanitized = sanitize(failure);
+      notifyTerminal();
+      cancelClientCall(clientCall.get());
+      cancelRequest(requestStream.get(), reason);
+      super.completeExceptionally(sanitized);
     }
 
     private static void cancelRequest(ClientCallStreamObserver<?> stream) {
+      cancelRequest(stream, "RPC cancelled");
+    }
+
+    private static void cancelRequest(ClientCallStreamObserver<?> stream, String reason) {
       if (stream != null) {
         try {
-          stream.cancel("RPC cancelled", null);
+          stream.cancel(reason, null);
         } catch (RuntimeException ignored) {
           // Cancellation is already reflected by the future's terminal state.
         }
@@ -794,13 +799,20 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         return false;
       }
       notifyTerminal();
+      cancelTransport("Subscription outbound failed");
       completion.completeExceptionally(sanitize(failure));
       notifyError(failure);
       return true;
     }
 
     private void failBeforeStart(Throwable failure) {
-      terminateWithError(failure);
+      if (!terminateState()) {
+        return;
+      }
+      notifyTerminal();
+      cancelTransport("Subscription start failed");
+      completion.completeExceptionally(sanitize(failure));
+      notifyError(failure);
     }
 
     private void failCallback(Throwable failure) {
@@ -808,12 +820,9 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         return;
       }
       notifyTerminal();
+      cancelTransport("Subscription callback failed");
       completion.completeExceptionally(sanitize(failure));
       notifyError(failure);
-      StreamObserver<FetchRequest> requestObserver = requests.get();
-      if (requestObserver instanceof ClientCallStreamObserver<?> clientStream) {
-        cancelClientStream(clientStream, "Subscription callback failed");
-      }
     }
 
     private void terminateWithError(Throwable failure) {
@@ -836,6 +845,14 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private void notifyTerminal() {
       if (terminalNotified.compareAndSet(false, true)) {
         onTerminal.accept(this);
+      }
+    }
+
+    private void cancelTransport(String reason) {
+      cancelClientCall(clientCall.get(), reason);
+      StreamObserver<FetchRequest> requestObserver = requests.get();
+      if (requestObserver instanceof ClientCallStreamObserver<?> clientStream) {
+        cancelClientStream(clientStream, reason);
       }
     }
 
@@ -895,14 +912,14 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     }
   }
 
-  private static final class OperationClientCall<RequestT, ResponseT>
+  static final class OperationClientCall<RequestT, ResponseT>
       extends ClientCall<RequestT, ResponseT> {
 
     private final ClientCall<RequestT, ResponseT> delegate;
     private final AtomicReference<ClientCallState> state =
         new AtomicReference<>(ClientCallState.NEW);
 
-    private OperationClientCall(ClientCall<RequestT, ResponseT> delegate) {
+    OperationClientCall(ClientCall<RequestT, ResponseT> delegate) {
       this.delegate = delegate;
     }
 
@@ -924,7 +941,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     @Override
     public void request(int count) {
-      if (state.get() == ClientCallState.STARTED) {
+      if (canSendOutbound()) {
         delegate.request(count);
       }
     }
@@ -939,14 +956,14 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     @Override
     public void halfClose() {
-      if (state.get() == ClientCallState.STARTED) {
+      if (canSendOutbound()) {
         delegate.halfClose();
       }
     }
 
     @Override
     public void sendMessage(RequestT message) {
-      if (state.get() == ClientCallState.STARTED) {
+      if (canSendOutbound()) {
         delegate.sendMessage(message);
       }
     }
@@ -958,7 +975,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
     @Override
     public void setMessageCompression(boolean enabled) {
-      if (state.get() == ClientCallState.STARTED) {
+      if (canSendOutbound()) {
         delegate.setMessageCompression(enabled);
       }
     }
@@ -974,6 +991,17 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       } catch (RuntimeException ignored) {
         // The operation's terminal state remains authoritative.
       }
+    }
+
+    private boolean canSendOutbound() {
+      ClientCallState current = state.get();
+      if (current == ClientCallState.STARTED) {
+        return true;
+      }
+      if (current == ClientCallState.CANCELLED) {
+        return false;
+      }
+      throw new IllegalStateException("RPC client call has not finished starting");
     }
   }
 
