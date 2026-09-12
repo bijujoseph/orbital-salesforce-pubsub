@@ -21,6 +21,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Authentication provider for an embedding application that already owns a Salesforce session.
@@ -31,6 +33,8 @@ import java.util.function.Supplier;
  * operation.
  */
 public final class UserSuppliedAuthProvider implements SalesforceAuthProvider {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(UserSuppliedAuthProvider.class);
 
   private final AtomicReference<SalesforceSession> session;
   private final Supplier<SalesforceSession> sessionSupplier;
@@ -52,10 +56,14 @@ public final class UserSuppliedAuthProvider implements SalesforceAuthProvider {
   @Override
   public CompletionStage<SalesforceSession> authenticate() {
     try {
-      return CompletableFuture.completedFuture(loadSession());
+      SalesforceSession loaded = loadSession();
+      LOGGER.atInfo().log("Caller-supplied Salesforce session acquired");
+      return CompletableFuture.completedFuture(loaded);
     } catch (AuthenticationException exception) {
+      logAuthenticationFailure();
       return failedFuture(exception);
     } catch (RuntimeException exception) {
+      logAuthenticationFailure();
       return failedFuture(new AuthenticationException("Unable to obtain caller-supplied session"));
     }
   }
@@ -114,5 +122,12 @@ public final class UserSuppliedAuthProvider implements SalesforceAuthProvider {
     CompletableFuture<T> result = new CompletableFuture<>();
     result.completeExceptionally(failure);
     return result;
+  }
+
+  private static void logAuthenticationFailure() {
+    LOGGER
+        .atError()
+        .addKeyValue("exceptionCategory", AuthenticationException.class.getSimpleName())
+        .log("Caller-supplied Salesforce session acquisition failed");
   }
 }

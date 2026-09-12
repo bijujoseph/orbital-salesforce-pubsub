@@ -41,7 +41,11 @@ import com.salesforce.eventbus.protobuf.TopicRequest;
 import io.github.bijujoseph.salesforce.pubsub.auth.SalesforceSession;
 import io.github.bijujoseph.salesforce.pubsub.config.EndpointConfig;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
 import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
+import io.github.bijujoseph.salesforce.pubsub.error.SchemaLookupException;
+import io.github.bijujoseph.salesforce.pubsub.error.TopicNotFoundException;
+import io.github.bijujoseph.salesforce.pubsub.error.TransportException;
 import io.grpc.Attributes;
 import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
@@ -442,6 +446,43 @@ class PubSubApiTransportTest {
     assertEquals("Salesforce Pub/Sub RPC failed [INTERNAL]", failure.getMessage());
     assertNull(failure.getCause());
     assertSafe(failure.toString());
+  }
+
+  @Test
+  void grpcFailuresMapToTypedCategoriesWithoutRemoteDescriptionsOrCauses() throws Exception {
+    assertTopicFailure(Status.Code.UNAUTHENTICATED, AuthenticationException.class);
+    assertTopicFailure(Status.Code.PERMISSION_DENIED, AuthorizationException.class);
+    assertTopicFailure(Status.Code.UNAVAILABLE, TransportException.class);
+
+    restartServer(new CategorizedFailingService(Status.Code.NOT_FOUND));
+    Exception topicWrapper =
+        assertThrows(
+            Exception.class,
+            () -> transport.getTopic("/event/Missing__e").get(5, TimeUnit.SECONDS));
+    TopicNotFoundException topic =
+        assertInstanceOf(TopicNotFoundException.class, topicWrapper.getCause());
+    assertEquals("/event/Missing__e", topic.topic());
+    assertNull(topic.getCause());
+    assertSafe(topic.toString());
+
+    Exception schemaWrapper =
+        assertThrows(
+            Exception.class, () -> transport.getSchema("missing-schema").get(5, TimeUnit.SECONDS));
+    SchemaLookupException schema =
+        assertInstanceOf(SchemaLookupException.class, schemaWrapper.getCause());
+    assertEquals("missing-schema", schema.schemaId());
+    assertNull(schema.getCause());
+    assertSafe(schema.toString());
+  }
+
+  @Test
+  void missingSchemaIdIsATypedLookupFailureBeforeRpcStart() {
+    assertInstanceOf(
+        SchemaLookupException.class,
+        assertThrows(Exception.class, () -> transport.getSchema(null)));
+    assertInstanceOf(
+        SchemaLookupException.class, assertThrows(Exception.class, () -> transport.getSchema(" ")));
+    assertEquals(0, receivedCalls.get());
   }
 
   @Test
@@ -1751,6 +1792,17 @@ class PubSubApiTransportTest {
     assertTrue(future.isCancelled());
   }
 
+  private void assertTopicFailure(
+      Status.Code code, Class<? extends SalesforcePubSubException> expectedType) throws Exception {
+    restartServer(new CategorizedFailingService(code));
+    Exception wrapper =
+        assertThrows(
+            Exception.class, () -> transport.getTopic("/event/Test__e").get(5, TimeUnit.SECONDS));
+    SalesforcePubSubException failure = assertInstanceOf(expectedType, wrapper.getCause());
+    assertNull(failure.getCause());
+    assertSafe(failure.toString());
+  }
+
   private void restartServer(PubSubGrpc.PubSubImplBase service) throws Exception {
     closeCurrentResources();
     received.clear();
@@ -2487,6 +2539,32 @@ class PubSubApiTransportTest {
               .withDescription("server-sentinel token-0 instance-0 tenant-0")
               .withCause(new IllegalStateException("server-sentinel cause"))
               .asRuntimeException());
+    }
+  }
+
+  private static final class CategorizedFailingService extends PubSubGrpc.PubSubImplBase {
+
+    private final Status.Code code;
+
+    private CategorizedFailingService(Status.Code code) {
+      this.code = code;
+    }
+
+    @Override
+    public void getTopic(TopicRequest request, StreamObserver<TopicInfo> observer) {
+      observer.onError(failure());
+    }
+
+    @Override
+    public void getSchema(SchemaRequest request, StreamObserver<SchemaInfo> observer) {
+      observer.onError(failure());
+    }
+
+    private RuntimeException failure() {
+      return Status.fromCode(code)
+          .withDescription("server-sentinel token-0 instance-0 tenant-0 payload replay PII")
+          .withCause(new IllegalStateException("server-sentinel cause"))
+          .asRuntimeException();
     }
   }
 

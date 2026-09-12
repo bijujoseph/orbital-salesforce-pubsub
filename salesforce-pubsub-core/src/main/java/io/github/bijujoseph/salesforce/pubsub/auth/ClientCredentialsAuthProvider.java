@@ -17,6 +17,7 @@
 package io.github.bijujoseph.salesforce.pubsub.auth;
 
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -35,6 +36,8 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Acquires Salesforce sessions with the OAuth 2.0 client-credentials grant.
@@ -44,6 +47,8 @@ import java.util.concurrent.Flow;
  * never copied into an exception message because they can contain credentials.
  */
 public final class ClientCredentialsAuthProvider implements SalesforceAuthProvider {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(ClientCredentialsAuthProvider.class);
 
   private static final String TOKEN_PATH = "/services/oauth2/token";
   private static final Duration AUTH_REQUEST_TIMEOUT = Duration.ofSeconds(30);
@@ -85,6 +90,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
   public CompletionStage<SalesforceSession> authenticate() {
     synchronized (requestLock) {
       if (inFlight != null && !inFlight.isDone()) {
+        LOGGER.atDebug().log("Salesforce authentication joined in-flight request");
         return inFlight;
       }
 
@@ -92,6 +98,7 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       try {
         request = sendTokenRequest();
       } catch (RuntimeException exception) {
+        logAuthenticationFailure(AuthenticationException.class);
         return failedFuture(
             new AuthenticationException("Salesforce authentication request failed"));
       }
@@ -139,8 +146,11 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
             return;
           }
           try {
-            result.complete(mapResponse(response, failure));
+            SalesforceSession mapped = mapResponse(response, failure);
+            LOGGER.atInfo().log("Salesforce authentication completed");
+            result.complete(mapped);
           } catch (RuntimeException exception) {
+            logAuthenticationFailure(exception.getClass());
             result.completeExceptionally(exception);
           }
         });
@@ -171,6 +181,9 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       throw new AuthenticationException("Salesforce authentication response was invalid");
     }
     if (statusCode < 200 || statusCode >= 300) {
+      if (statusCode == 403) {
+        throw new AuthorizationException("Salesforce authentication endpoint denied authorization");
+      }
       throw new AuthenticationException(
           "Salesforce authentication request failed with an unsuccessful response");
     }
@@ -214,6 +227,13 @@ public final class ClientCredentialsAuthProvider implements SalesforceAuthProvid
       current = current.getCause();
     }
     return false;
+  }
+
+  private static void logAuthenticationFailure(Class<?> failureType) {
+    LOGGER
+        .atError()
+        .addKeyValue("exceptionCategory", failureType.getSimpleName())
+        .log("Salesforce authentication failed");
   }
 
   private static final class BoundedStringBodySubscriber

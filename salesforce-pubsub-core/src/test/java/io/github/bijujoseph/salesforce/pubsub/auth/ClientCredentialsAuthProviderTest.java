@@ -19,6 +19,7 @@ package io.github.bijujoseph.salesforce.pubsub.auth;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -26,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
 import java.io.IOException;
 import java.net.Authenticator;
 import java.net.CookieHandler;
@@ -177,6 +179,28 @@ class ClientCredentialsAuthProviderTest {
         authenticationException.getMessage());
     assertFalse(authenticationException.getMessage().contains("client-secret-is-secret"));
     assertFalse(authenticationException.getMessage().contains("client-secret"));
+  }
+
+  @Test
+  void mapsForbiddenResponseToAuthorizationWithoutLeakingResponseBody() {
+    replaceResponse(403, "client-secret-is-secret payload replay customer-id pii");
+    ClientCredentialsAuthProvider provider =
+        new ClientCredentialsAuthProvider(
+            "http://localhost:" + server.getAddress().getPort(), "client", "client-secret");
+
+    CompletionException failure =
+        assertThrows(
+            CompletionException.class, () -> provider.authenticate().toCompletableFuture().join());
+    AuthorizationException authorization =
+        assertInstanceOf(AuthorizationException.class, failure.getCause());
+    assertEquals(
+        "Salesforce authentication endpoint denied authorization", authorization.getMessage());
+    assertNull(authorization.getCause());
+    assertFalse(authorization.toString().contains("client-secret"));
+    assertFalse(authorization.toString().contains("payload"));
+    assertFalse(authorization.toString().contains("replay"));
+    assertFalse(authorization.toString().contains("customer-id"));
+    assertFalse(authorization.toString().contains("pii"));
   }
 
   @Test

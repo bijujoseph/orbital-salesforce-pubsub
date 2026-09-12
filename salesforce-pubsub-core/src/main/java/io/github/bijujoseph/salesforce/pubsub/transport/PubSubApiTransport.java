@@ -27,7 +27,12 @@ import com.salesforce.eventbus.protobuf.TopicInfo;
 import com.salesforce.eventbus.protobuf.TopicRequest;
 import io.github.bijujoseph.salesforce.pubsub.auth.SalesforceSession;
 import io.github.bijujoseph.salesforce.pubsub.config.EndpointConfig;
+import io.github.bijujoseph.salesforce.pubsub.error.AuthenticationException;
+import io.github.bijujoseph.salesforce.pubsub.error.AuthorizationException;
 import io.github.bijujoseph.salesforce.pubsub.error.SalesforcePubSubException;
+import io.github.bijujoseph.salesforce.pubsub.error.SchemaLookupException;
+import io.github.bijujoseph.salesforce.pubsub.error.TopicNotFoundException;
+import io.github.bijujoseph.salesforce.pubsub.error.TransportException;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
@@ -60,6 +65,8 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Secure asynchronous transport for Salesforce Pub/Sub API calls.
@@ -70,6 +77,8 @@ import java.util.function.Supplier;
  * orchestration are deferred to OSP-035.
  */
 public final class PubSubApiTransport implements SalesforceEventTransport {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(PubSubApiTransport.class);
 
   // A fresh virtual thread per cancellation avoids a shared queue or executor lifecycle.
   private static final ThreadFactory CANCELLATION_COMPLETION_THREADS =
@@ -137,11 +146,13 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
   @Override
   public CompletableFuture<TopicMetadata> getTopic(String topicName) {
     if (topicName == null) {
-      throw new SalesforcePubSubException("Missing topic name for Salesforce Pub/Sub RPC");
+      throw new TopicNotFoundException(null);
     }
     TopicRequest request = TopicRequest.newBuilder().setTopicName(topicName).build();
     return invokeUnary(
-            (stub, observer) -> stub.getTopic(request, observer), PubSubApiTransport::mapTopic)
+            (stub, observer) -> stub.getTopic(request, observer),
+            PubSubApiTransport::mapTopic,
+            FailureContext.topic(topicName))
         .readOnlyStage();
   }
 
@@ -150,12 +161,14 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
    */
   @Override
   public CompletableFuture<SchemaMetadata> getSchema(String schemaId) {
-    if (schemaId == null) {
-      throw new SalesforcePubSubException("Missing schema ID for Salesforce Pub/Sub RPC");
+    if (schemaId == null || schemaId.isBlank()) {
+      throw new SchemaLookupException(schemaId);
     }
     SchemaRequest request = SchemaRequest.newBuilder().setSchemaId(schemaId).build();
     return invokeUnary(
-            (stub, observer) -> stub.getSchema(request, observer), PubSubApiTransport::mapSchema)
+            (stub, observer) -> stub.getSchema(request, observer),
+            PubSubApiTransport::mapSchema,
+            FailureContext.schema(schemaId))
         .readOnlyStage();
   }
 
@@ -168,6 +181,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       }
       session.set(replacement);
     }
+    LOGGER.atDebug().log("Salesforce Pub/Sub transport session metadata updated");
   }
 
   @Override
@@ -189,6 +203,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       operation.closeFromTransport();
     }
     channel.shutdownNow();
+    LOGGER.atInfo().log("Salesforce Pub/Sub transport shutdown started");
   }
 
   CompletionStage<PublishResponse> publish(PublishRequest request) {
@@ -197,7 +212,9 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
           "Salesforce Pub/Sub unary Publish requires exactly one event");
     }
     return this.<PublishResponse, PublishResponse>invokeUnary(
-            (stub, observer) -> stub.publish(request, observer), Function.identity())
+            (stub, observer) -> stub.publish(request, observer),
+            Function.identity(),
+            FailureContext.none())
         .readOnlyStage();
   }
 
@@ -222,10 +239,12 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
 
   private <RawResponseT, ResponseT> CancellableRpcFuture<ResponseT> invokeUnary(
       BiConsumer<PubSubGrpc.PubSubStub, StreamObserver<RawResponseT>> invocation,
-      Function<RawResponseT, ResponseT> responseMapper) {
+      Function<RawResponseT, ResponseT> responseMapper,
+      FailureContext failureContext) {
     Objects.requireNonNull(invocation, "RPC invocation");
     Objects.requireNonNull(responseMapper, "response mapper");
-    CancellableRpcFuture<ResponseT> result = new CancellableRpcFuture<>(this::unregister);
+    CancellableRpcFuture<ResponseT> result =
+        new CancellableRpcFuture<>(this::unregister, failureContext);
     registerForNewRpc(result);
     try {
       beforeRpcStart.run();
@@ -302,10 +321,52 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     return new SchemaMetadata(response.getSchemaId(), response.getSchemaJson());
   }
 
-  private static RpcFailure sanitize(Throwable failure) {
+  private static SalesforcePubSubException sanitize(Throwable failure) {
+    return sanitize(failure, FailureContext.none());
+  }
+
+  private static SalesforcePubSubException sanitize(
+      Throwable failure, FailureContext failureContext) {
     Status.Code code =
         failure == null ? Status.Code.UNKNOWN : Status.fromThrowable(failure).getCode();
-    return new RpcFailure(code);
+    SalesforcePubSubException mapped =
+        switch (code) {
+          case UNAUTHENTICATED ->
+              new AuthenticationException(
+                  "Salesforce Pub/Sub authentication failed [UNAUTHENTICATED]");
+          case PERMISSION_DENIED ->
+              new AuthorizationException(
+                  "Salesforce Pub/Sub authorization failed [PERMISSION_DENIED]");
+          case NOT_FOUND -> failureContext.notFoundException();
+          default -> new TransportException(code.name());
+        };
+    logFailure(code, mapped);
+    return mapped;
+  }
+
+  private static void logFailure(Status.Code code, SalesforcePubSubException failure) {
+    if (code == Status.Code.CANCELLED) {
+      LOGGER
+          .atDebug()
+          .addKeyValue("grpcStatus", code)
+          .addKeyValue("exceptionCategory", failure.getClass().getSimpleName())
+          .log("Salesforce Pub/Sub RPC cancelled");
+    } else if (code == Status.Code.UNAVAILABLE
+        || code == Status.Code.DEADLINE_EXCEEDED
+        || code == Status.Code.RESOURCE_EXHAUSTED
+        || code == Status.Code.ABORTED) {
+      LOGGER
+          .atWarn()
+          .addKeyValue("grpcStatus", code)
+          .addKeyValue("exceptionCategory", failure.getClass().getSimpleName())
+          .log("Salesforce Pub/Sub RPC transient failure");
+    } else {
+      LOGGER
+          .atError()
+          .addKeyValue("grpcStatus", code)
+          .addKeyValue("exceptionCategory", failure.getClass().getSimpleName())
+          .log("Salesforce Pub/Sub RPC terminal failure");
+    }
   }
 
   private interface ActiveOperation {
@@ -375,28 +436,33 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private final AtomicReference<RpcState> state = new AtomicReference<>(RpcState.RESERVED);
     private final Consumer<ActiveOperation> onTerminal;
     private final Executor cancellationCompletionExecutor;
+    private final FailureContext failureContext;
     private final AtomicBoolean terminalNotified = new AtomicBoolean();
 
     CancellableRpcFuture() {
-      this(ignored -> {}, CANCELLATION_COMPLETION_EXECUTOR);
-      state.set(RpcState.ACTIVE);
-    }
-
-    private CancellableRpcFuture(Consumer<ActiveOperation> onTerminal) {
-      this(onTerminal, CANCELLATION_COMPLETION_EXECUTOR);
-    }
-
-    CancellableRpcFuture(Executor cancellationCompletionExecutor) {
-      this(ignored -> {}, cancellationCompletionExecutor);
+      this(ignored -> {}, CANCELLATION_COMPLETION_EXECUTOR, FailureContext.none());
       state.set(RpcState.ACTIVE);
     }
 
     private CancellableRpcFuture(
-        Consumer<ActiveOperation> onTerminal, Executor cancellationCompletionExecutor) {
+        Consumer<ActiveOperation> onTerminal, FailureContext failureContext) {
+      this(onTerminal, CANCELLATION_COMPLETION_EXECUTOR, failureContext);
+    }
+
+    CancellableRpcFuture(Executor cancellationCompletionExecutor) {
+      this(ignored -> {}, cancellationCompletionExecutor, FailureContext.none());
+      state.set(RpcState.ACTIVE);
+    }
+
+    private CancellableRpcFuture(
+        Consumer<ActiveOperation> onTerminal,
+        Executor cancellationCompletionExecutor,
+        FailureContext failureContext) {
       this.onTerminal = onTerminal;
       this.cancellationCompletionExecutor =
           Objects.requireNonNull(
               cancellationCompletionExecutor, "cancellation completion executor");
+      this.failureContext = Objects.requireNonNull(failureContext, "failure context");
     }
 
     @Override
@@ -469,7 +535,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       if (!terminateState()) {
         return;
       }
-      RpcFailure sanitized = sanitize(failure);
+      SalesforcePubSubException sanitized = sanitize(failure, failureContext);
       notifyTerminal();
       cancelClientCall(clientCall.get());
       cancelRequest(requestStream.get(), reason);
@@ -527,7 +593,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         return false;
       }
       notifyTerminal();
-      return super.completeExceptionally(sanitize(failure));
+      return super.completeExceptionally(sanitize(failure, failureContext));
     }
 
     private boolean terminateState() {
@@ -1119,12 +1185,32 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     TERMINATED
   }
 
-  private static final class RpcFailure extends SalesforcePubSubException {
+  private record FailureContext(Resource resource, String identifier) {
 
-    private static final long serialVersionUID = 1L;
-
-    private RpcFailure(Status.Code code) {
-      super("Salesforce Pub/Sub RPC failed [" + code + "]");
+    private static FailureContext none() {
+      return new FailureContext(Resource.NONE, null);
     }
+
+    private static FailureContext topic(String topic) {
+      return new FailureContext(Resource.TOPIC, topic);
+    }
+
+    private static FailureContext schema(String schemaId) {
+      return new FailureContext(Resource.SCHEMA, schemaId);
+    }
+
+    private SalesforcePubSubException notFoundException() {
+      return switch (resource) {
+        case TOPIC -> new TopicNotFoundException(identifier);
+        case SCHEMA -> new SchemaLookupException(identifier);
+        case NONE -> new TransportException(Status.Code.NOT_FOUND.name());
+      };
+    }
+  }
+
+  private enum Resource {
+    NONE,
+    TOPIC,
+    SCHEMA
   }
 }
