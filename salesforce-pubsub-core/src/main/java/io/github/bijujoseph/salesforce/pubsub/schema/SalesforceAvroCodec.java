@@ -132,7 +132,8 @@ public final class SalesforceAvroCodec {
       case ARRAY -> normalizeArray(schema.getElementType(), datum);
       case STRING -> datum instanceof Utf8 ? datum.toString() : datum;
       case BYTES -> copyBytes(datum);
-      default -> datum;
+      case BOOLEAN, INT, LONG, FLOAT, DOUBLE, NULL -> datum;
+      default -> throw new IllegalArgumentException("unsupported Avro value type");
     };
   }
 

@@ -26,9 +26,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.bijujoseph.salesforce.pubsub.auth.SalesforceSession;
 import io.github.bijujoseph.salesforce.pubsub.error.EventDecodeException;
 import io.github.bijujoseph.salesforce.pubsub.error.EventEncodeException;
+import io.github.bijujoseph.salesforce.pubsub.model.SalesforceEvent;
 import io.github.bijujoseph.salesforce.pubsub.transport.SalesforceEventTransport;
 import io.github.bijujoseph.salesforce.pubsub.transport.SchemaMetadata;
 import io.github.bijujoseph.salesforce.pubsub.transport.TopicMetadata;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -43,6 +46,11 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericDatumWriter;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.io.Encoder;
+import org.apache.avro.io.EncoderFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -178,6 +186,27 @@ class SalesforceAvroCodecTest {
     assertArrayEquals(new byte[] {0x00, (byte) 0xFF}, (byte[]) decoded.get("binary"));
   }
 
+  @Test
+  void deeplySnapshottedEventPayloadRemainsCodecCompatible() {
+    Map<String, Object> decoded =
+        codec.decode(SCHEMA_ID, codec.encode(SCHEMA_ID, completePayload()));
+    SalesforceEvent event =
+        new SalesforceEvent(
+            "/event/Test__e",
+            "salesforce-id",
+            new byte[] {0x01},
+            SCHEMA_ID,
+            Instant.EPOCH,
+            decoded);
+
+    Map<String, Object> roundTripped =
+        codec.decode(SCHEMA_ID, codec.encode(SCHEMA_ID, event.payload()));
+
+    assertEquals(decoded.get("children"), roundTripped.get("children"));
+    assertEquals(decoded.get("tags"), roundTripped.get("tags"));
+    assertArrayEquals((byte[]) decoded.get("binary"), (byte[]) roundTripped.get("binary"));
+  }
+
   @ParameterizedTest(name = "round trips {0}")
   @MethodSource("nullableValues")
   void nullableUnionRoundTrips(String field, Object value) {
@@ -265,6 +294,21 @@ class SalesforceAvroCodecTest {
   }
 
   @Test
+  void unsupportedDecodedAvroValuesRaiseTypedFailure() throws IOException {
+    Schema enumRecord =
+        new Schema.Parser()
+            .parse(
+                "{\"type\":\"record\",\"name\":\"DecodedEnumRecord\",\"fields\":[{\"name\":\"value\",\"type\":{\"type\":\"enum\",\"name\":\"DecodedChoice\",\"symbols\":[\"A\"]}}]}");
+    schemas.put("decoded-enum", enumRecord);
+    GenericRecord datum = new GenericData.Record(enumRecord);
+    datum.put("value", new GenericData.EnumSymbol(enumRecord.getField("value").schema(), "A"));
+
+    assertThrows(
+        EventDecodeException.class,
+        () -> codec.decode("decoded-enum", encodeDatum(enumRecord, datum)));
+  }
+
+  @Test
   void wrongTypeFailsBeforeAnyNetworkBoundaryWithoutRenderingTheValue() {
     Map<String, Object> payload = completePayload();
     String secret = "sensitive-event-payload";
@@ -344,6 +388,14 @@ class SalesforceAvroCodecTest {
     Map<String, Object> map = new LinkedHashMap<>();
     map.put(key, value);
     return map;
+  }
+
+  private static byte[] encodeDatum(Schema schema, Object datum) throws IOException {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    Encoder encoder = EncoderFactory.get().binaryEncoder(output, null);
+    new GenericDatumWriter<>(schema).write(datum, encoder);
+    encoder.flush();
+    return output.toByteArray();
   }
 
   private static Map<String, Object> completePayload() {

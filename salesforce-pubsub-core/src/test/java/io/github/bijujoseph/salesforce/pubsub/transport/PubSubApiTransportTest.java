@@ -513,7 +513,7 @@ class PubSubApiTransportTest {
     assertPublishFailure(Status.Code.PERMISSION_DENIED, AuthorizationException.class);
   }
 
-  @Test
+  @RepeatedTest(50)
   void subscribeRpcFailuresUseSubscriptionCategoryWithoutMaskingAuthCategories() throws Exception {
     assertSubscriptionFailure(
         Status.Code.UNAVAILABLE, SubscriptionException.class, "WARN", ConnectorStatus.DEGRADED);
@@ -2066,6 +2066,7 @@ class PubSubApiTransportTest {
         assertThrows(
             Exception.class,
             () -> subscription.completion().toCompletableFuture().get(5, TimeUnit.SECONDS));
+    assertTrue(downstream.errorReceived.await(5, TimeUnit.SECONDS));
 
     SalesforcePubSubException failure = assertInstanceOf(expectedType, wrapper.getCause());
     assertSame(failure, downstream.failure.get());
@@ -2086,6 +2087,9 @@ class PubSubApiTransportTest {
     assertFalse(event.toString().contains("payload"));
     assertFalse(event.toString().contains("replay"));
     assertFalse(event.toString().contains("PII"));
+    assertEquals(1, downstream.errors.get());
+    assertEquals(0, downstream.completed.get());
+    assertEquals(0, downstream.next.get());
   }
 
   private void restartServer(PubSubGrpc.PubSubImplBase service) throws Exception {
@@ -2598,6 +2602,7 @@ class PubSubApiTransportTest {
     private final AtomicInteger completed = new AtomicInteger();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private final CountDownLatch nextReceived;
+    private final CountDownLatch errorReceived = new CountDownLatch(1);
 
     private RecordingObserver() {
       this(0);
@@ -2617,6 +2622,7 @@ class PubSubApiTransportTest {
     public void onError(Throwable failure) {
       errors.incrementAndGet();
       this.failure.set(failure);
+      errorReceived.countDown();
     }
 
     @Override
