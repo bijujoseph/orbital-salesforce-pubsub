@@ -29,6 +29,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /** Asynchronous unary publisher for one custom Platform Event at a time. */
 public final class SalesforcePublisher {
@@ -73,42 +76,28 @@ public final class SalesforcePublisher {
    */
   public CompletionStage<PublishReceipt> publish(PublishRequest request) {
     if (request == null) {
-      return CompletableFuture.failedFuture(new PublishException("Publish request is required"));
+      PublishOperation rejected = new PublishOperation(null, null);
+      rejected.fail(new PublishException("Publish request is required"));
+      return rejected;
     }
 
     String topic = request.topic();
     Map<String, Object> payload = request.payload();
     String correlationKey = effectiveCorrelationKey(request.correlationKey());
 
-    CompletionStage<PublishReceipt> result;
-    try {
-      result =
-          topicResolver
-              .resolveForPublish(topic)
-              .thenCompose(
-                  resolvedTopic ->
-                      schemaCache
-                          .resolveAndEncode(resolvedTopic.schemaId(), payload)
-                          .thenApply(
-                              encoded -> new EncodedEvent(resolvedTopic.schemaId(), encoded)))
-              .thenCompose(
-                  encoded ->
-                      transport.publishSingleEvent(
-                          topic, correlationKey, encoded.schemaId(), encoded.payload()));
-    } catch (RuntimeException failure) {
-      result = CompletableFuture.failedFuture(failure);
-    }
-
-    result.whenComplete(
-        (receipt, failure) -> {
-          if (failure == null) {
-            recordTelemetry(() -> telemetry.published(topic, correlationKey));
-          } else {
-            Throwable cause = telemetryCause(failure);
-            recordTelemetry(() -> telemetry.publishFailure(topic, cause));
-          }
-        });
-    return result;
+    PublishOperation operation = new PublishOperation(topic, correlationKey);
+    operation.continueWith(
+        () -> topicResolver.resolveForPublish(topic),
+        resolvedTopic ->
+            operation.continueWith(
+                () -> schemaCache.resolveAndEncode(resolvedTopic.schemaId(), payload),
+                encoded ->
+                    operation.continueWith(
+                        () ->
+                            transport.publishSingleEvent(
+                                topic, correlationKey, resolvedTopic.schemaId(), encoded),
+                        operation::succeed)));
+    return operation;
   }
 
   private static String effectiveCorrelationKey(String supplied) {
@@ -133,5 +122,165 @@ public final class SalesforcePublisher {
     return cause;
   }
 
-  private record EncodedEvent(String schemaId, byte[] payload) {}
+  private final class PublishOperation extends CompletableFuture<PublishReceipt> {
+
+    private final Object lock = new Object();
+    private final String topic;
+    private final String correlationKey;
+    private CompletableFuture<?> activeStage;
+    private OperationState state = OperationState.ACTIVE;
+
+    private PublishOperation(String topic, String correlationKey) {
+      this.topic = topic;
+      this.correlationKey = correlationKey;
+    }
+
+    private <T> void continueWith(
+        Supplier<? extends CompletionStage<T>> stageSupplier, Consumer<T> onSuccess) {
+      CompletableFuture<T> stage = null;
+      RuntimeException startFailure = null;
+      synchronized (lock) {
+        if (state != OperationState.ACTIVE) {
+          return;
+        }
+        try {
+          CompletionStage<T> supplied =
+              Objects.requireNonNull(stageSupplier.get(), "publish operation stage");
+          stage = supplied.toCompletableFuture();
+          activeStage = stage;
+        } catch (RuntimeException failure) {
+          startFailure = failure;
+        }
+      }
+      if (startFailure != null) {
+        fail(startFailure);
+        return;
+      }
+
+      CompletableFuture<T> trackedStage = stage;
+      trackedStage.whenComplete(
+          (value, failure) -> stageCompleted(trackedStage, value, failure, onSuccess));
+    }
+
+    private <T> void stageCompleted(
+        CompletableFuture<T> completedStage, T value, Throwable failure, Consumer<T> onSuccess) {
+      synchronized (lock) {
+        if (state != OperationState.ACTIVE || activeStage != completedStage) {
+          return;
+        }
+        activeStage = null;
+      }
+      if (failure != null) {
+        fail(telemetryCause(failure));
+        return;
+      }
+      try {
+        onSuccess.accept(value);
+      } catch (RuntimeException callbackFailure) {
+        fail(callbackFailure);
+      }
+    }
+
+    private void succeed(PublishReceipt receipt) {
+      if (!terminate(OperationState.SUCCEEDED)) {
+        return;
+      }
+      recordTelemetry(() -> telemetry.published(topic, correlationKey));
+      super.complete(receipt);
+    }
+
+    private void fail(Throwable failure) {
+      Throwable cause = telemetryCause(failure);
+      if (!terminate(OperationState.FAILED)) {
+        return;
+      }
+      recordTelemetry(() -> telemetry.publishFailure(topic, cause));
+      super.completeExceptionally(cause);
+    }
+
+    private boolean terminate(OperationState terminalState) {
+      synchronized (lock) {
+        if (state != OperationState.ACTIVE) {
+          return false;
+        }
+        state = terminalState;
+        activeStage = null;
+        return true;
+      }
+    }
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+      CompletableFuture<?> stageToCancel;
+      synchronized (lock) {
+        if (state != OperationState.ACTIVE) {
+          return false;
+        }
+        state = OperationState.CANCELLED;
+        stageToCancel = activeStage;
+        activeStage = null;
+      }
+      boolean cancelled = super.cancel(mayInterruptIfRunning);
+      if (stageToCancel != null) {
+        stageToCancel.cancel(mayInterruptIfRunning);
+      }
+      recordTelemetry(
+          () -> telemetry.publishFailure(topic, new java.util.concurrent.CancellationException()));
+      return cancelled;
+    }
+
+    @Override
+    public boolean complete(PublishReceipt value) {
+      return false;
+    }
+
+    @Override
+    public boolean completeExceptionally(Throwable failure) {
+      return false;
+    }
+
+    @Override
+    public void obtrudeValue(PublishReceipt value) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public void obtrudeException(Throwable failure) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public CompletableFuture<PublishReceipt> completeAsync(
+        Supplier<? extends PublishReceipt> supplier, java.util.concurrent.Executor executor) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public CompletableFuture<PublishReceipt> completeAsync(
+        Supplier<? extends PublishReceipt> supplier) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public CompletableFuture<PublishReceipt> orTimeout(long timeout, TimeUnit unit) {
+      throw readOnlyFailure();
+    }
+
+    @Override
+    public CompletableFuture<PublishReceipt> completeOnTimeout(
+        PublishReceipt value, long timeout, TimeUnit unit) {
+      throw readOnlyFailure();
+    }
+
+    private UnsupportedOperationException readOnlyFailure() {
+      return new UnsupportedOperationException("Salesforce publish stage is read-only");
+    }
+  }
+
+  private enum OperationState {
+    ACTIVE,
+    CANCELLED,
+    SUCCEEDED,
+    FAILED
+  }
 }

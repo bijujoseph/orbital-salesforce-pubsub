@@ -273,8 +273,10 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         || schemaId == null
         || schemaId.isBlank()
         || payload == null) {
-      return CompletableFuture.failedFuture(
+      CancellableRpcFuture<PublishReceipt> rejected = new CancellableRpcFuture<>();
+      rejected.completeExceptionally(
           new PublishException("Validated topic, correlation, schema, and payload are required"));
+      return rejected.readOnlyStage();
     }
 
     ProducerEvent event =
@@ -285,8 +287,11 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
             .build();
     PublishRequest request =
         PublishRequest.newBuilder().setTopicName(topic).addEvents(event).build();
-    return publish(request)
-        .thenApply(response -> validatePublishResponse(topic, correlationKey, response));
+    return this.<PublishResponse, PublishReceipt>invokeUnary(
+            (stub, observer) -> stub.publish(request, observer),
+            response -> validatePublishResponse(topic, correlationKey, response),
+            FailureContext.publish())
+        .readOnlyStage();
   }
 
   SubscriptionRpc subscribe(StreamObserver<FetchResponse> responseObserver) {
@@ -535,7 +540,7 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
         this.response = responseMapper.apply(response);
         receivedResponse = true;
       } catch (RuntimeException exception) {
-        result.failAndCancel(exception, "Invalid unary RPC response");
+        result.failMappedResponse(exception, "Invalid unary RPC response");
       }
     }
 
@@ -707,6 +712,21 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
       super.completeExceptionally(sanitized);
     }
 
+    private void failMappedResponse(RuntimeException failure, String reason) {
+      if (!(failure instanceof SalesforcePubSubException domainFailure)) {
+        failAndCancel(failure, reason);
+        return;
+      }
+      if (!terminateState()) {
+        return;
+      }
+      report(Status.Code.UNKNOWN, domainFailure);
+      notifyTerminal();
+      cancelClientCall(clientCall.get());
+      cancelRequest(requestStream.get(), reason);
+      super.completeExceptionally(domainFailure);
+    }
+
     private static void cancelRequest(ClientCallStreamObserver<?> stream) {
       cancelRequest(stream, "RPC cancelled");
     }
@@ -765,12 +785,16 @@ public final class PubSubApiTransport implements SalesforceEventTransport {
     private SalesforcePubSubException mapAndReport(Throwable failure) {
       Status.Code code = statusCode(failure);
       SalesforcePubSubException sanitized = mapFailure(code, failureContext);
+      report(code, sanitized);
+      return sanitized;
+    }
+
+    private void report(Status.Code code, SalesforcePubSubException failure) {
       try {
-        failureReporter.accept(code, sanitized);
+        failureReporter.accept(code, failure);
       } catch (RuntimeException ignored) {
         // Diagnostics must never alter RPC completion.
       }
-      return sanitized;
     }
 
     private void notifySuccess() {

@@ -56,6 +56,7 @@ import io.grpc.Server;
 import io.grpc.Status;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
+import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayInputStream;
 import java.lang.reflect.Method;
@@ -74,6 +75,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.avro.Schema;
@@ -266,6 +268,30 @@ class SalesforcePublisherTest {
   }
 
   @Test
+  void nullPayloadFailsBeforePublishEvenWhenSchemaAcceptsAnEmptyRecord() {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+
+    Throwable failure =
+        failureOf(
+            observedPublisher.publish(
+                new PublishRequest(
+                    "/event/Permissive__e", null, "null-payload-correlation-sentinel")));
+
+    assertInstanceOf(EventEncodeException.class, failure);
+    assertEquals(List.of("GetTopic", "GetSchema"), service.callOrder);
+    assertEquals(1, service.schemaRequestCount("schema-permissive"));
+    assertEquals(0, service.publishCalls);
+    assertEquals(0, telemetry.successes.get());
+    assertEquals(1, telemetry.failures.size());
+    assertSame(failure, telemetry.failures.get(0));
+    assertEquals("EventEncodeException", telemetry.failureLabels.get(0).exceptionType());
+    String diagnostics = failure + " " + telemetry.failureLabels + " " + logger.events();
+    assertFalse(diagnostics.contains("null-payload-correlation-sentinel"));
+    assertFalse(diagnostics.contains(TOKEN_SENTINEL));
+  }
+
+  @Test
   void resultErrorAndMalformedResultShapesNeverReturnAReceipt() {
     for (ResponseMode mode :
         List.of(
@@ -339,12 +365,13 @@ class SalesforcePublisherTest {
   }
 
   @Test
-  void cancellationRemainsCallerVisibleAndTelemetryReceivesCancellation() {
+  void cancellationBeforePublishRemainsCallerVisibleAndStopsTheFlow() throws Exception {
     FailureTelemetry telemetry = new FailureTelemetry();
     SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
     CompletableFuture<PublishReceipt> publication =
         observedPublisher.publish(request("/event/Held__e")).toCompletableFuture();
     assertFalse(publication.isDone());
+    assertTrue(service.awaitFirstHeldSchemaRequest());
 
     assertTrue(publication.cancel(true));
 
@@ -355,6 +382,103 @@ class SalesforcePublisherTest {
     assertInstanceOf(CancellationException.class, telemetry.failures.get(0));
     assertEquals("CancellationException", telemetry.failureLabels.get(0).exceptionType());
     assertEquals(0, service.publishCalls);
+  }
+
+  @Test
+  void cancellationAfterPublishReceiptCancelsServerAndLateResponseCannotWin() throws Exception {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+    service.responseMode = ResponseMode.HOLD_PUBLISH;
+    CompletableFuture<PublishReceipt> publication =
+        observedPublisher.publish(request(VALID_TOPIC)).toCompletableFuture();
+    assertTrue(service.awaitPublishReceived());
+    assertFalse(publication.isDone());
+    assertEquals(1, service.publishCalls);
+
+    assertTrue(publication.cancel(true));
+
+    assertTrue(service.awaitPublishCancellation());
+    assertTrue(publication.isCancelled());
+    assertThrows(CancellationException.class, publication::join);
+    service.releaseHeldPublish();
+    assertTrue(publication.isCancelled());
+    assertEquals(0, telemetry.successes.get());
+    assertEquals(1, telemetry.failures.size());
+    assertInstanceOf(CancellationException.class, telemetry.failures.get(0));
+    assertEquals("CancellationException", telemetry.failureLabels.get(0).exceptionType());
+    String diagnostics = telemetry.failures + " " + telemetry.failureLabels + " " + logger.events();
+    assertFalse(diagnostics.contains(PAYLOAD_SENTINEL));
+    assertFalse(diagnostics.contains(TOKEN_SENTINEL));
+  }
+
+  @Test
+  void completedPublishResponseWinsAndCannotBeCancelledAfterward() throws Exception {
+    FailureTelemetry telemetry = new FailureTelemetry();
+    SalesforcePublisher observedPublisher = new SalesforcePublisher(transport, telemetry);
+    service.responseMode = ResponseMode.HOLD_PUBLISH;
+    CompletableFuture<PublishReceipt> publication =
+        observedPublisher.publish(request(VALID_TOPIC)).toCompletableFuture();
+    assertTrue(service.awaitPublishReceived());
+
+    service.releaseHeldPublish();
+    PublishReceipt receipt = publication.get(5, TimeUnit.SECONDS);
+
+    assertEquals("caller-correlation", receipt.correlationKey());
+    assertFalse(publication.cancel(true));
+    assertFalse(publication.isCancelled());
+    assertEquals(1L, service.publishCancellationCount());
+    assertEquals(1, telemetry.successes.get());
+    assertTrue(telemetry.failures.isEmpty());
+  }
+
+  @Test
+  void mappedTransportPublishStageRejectsExternalMutationAndForwardsCancellation()
+      throws Exception {
+    service.responseMode = ResponseMode.HOLD_PUBLISH;
+    CompletableFuture<PublishReceipt> publication =
+        transport
+            .publishSingleEvent(VALID_TOPIC, "caller-correlation", SCHEMA_ID, new byte[] {1, 2})
+            .toCompletableFuture();
+    assertTrue(service.awaitPublishReceived());
+    PublishReceipt forged =
+        new PublishReceipt("forged", "forged", new byte[] {9}, "forged", "forged");
+
+    assertFalse(publication.complete(forged));
+    assertFalse(publication.completeExceptionally(new IllegalStateException("forged")));
+    assertThrows(UnsupportedOperationException.class, () -> publication.obtrudeValue(forged));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> publication.obtrudeException(new IllegalStateException("forged")));
+    assertThrows(
+        UnsupportedOperationException.class, () -> publication.completeAsync(() -> forged));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> publication.completeAsync(() -> forged, Runnable::run));
+    assertThrows(
+        UnsupportedOperationException.class, () -> publication.orTimeout(1, TimeUnit.SECONDS));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> publication.completeOnTimeout(forged, 1, TimeUnit.SECONDS));
+    assertFalse(publication.isDone());
+    assertEquals(1L, service.publishCancellationCount());
+
+    assertTrue(publication.cancel(true));
+
+    assertTrue(service.awaitPublishCancellation());
+    assertTrue(publication.isCancelled());
+    assertTrue(publication.isDone());
+    assertTrue(publication.isCompletedExceptionally());
+    assertEquals(Future.State.CANCELLED, publication.state());
+    assertThrows(CancellationException.class, publication::join);
+    assertThrows(CancellationException.class, publication::get);
+    assertThrows(CancellationException.class, () -> publication.get(1, TimeUnit.SECONDS));
+    assertThrows(CancellationException.class, () -> publication.getNow(forged));
+    service.releaseHeldPublish();
+    assertTrue(publication.isCancelled());
+    String diagnostics = logger.events().toString();
+    assertFalse(diagnostics.contains(PAYLOAD_SENTINEL));
+    assertFalse(diagnostics.contains(TOKEN_SENTINEL));
+    assertFalse(diagnostics.contains("caller-correlation"));
   }
 
   @Test
@@ -530,7 +654,8 @@ class SalesforcePublisherTest {
     EMPTY,
     MULTIPLE,
     MISMATCHED_CORRELATION,
-    RPC_UNAUTHENTICATED
+    RPC_UNAUTHENTICATED,
+    HOLD_PUBLISH
   }
 
   private static final class FailureTelemetry implements SalesforcePubSubTelemetry {
@@ -574,9 +699,13 @@ class SalesforcePublisherTest {
     private final Map<String, Integer> schemaRequestCounts = new LinkedHashMap<>();
     private final CountDownLatch firstHeldSchemaRequest = new CountDownLatch(1);
     private final CountDownLatch twoHeldSchemaRequests = new CountDownLatch(2);
+    private final CountDownLatch publishReceived = new CountDownLatch(1);
+    private final CountDownLatch publishCancelled = new CountDownLatch(1);
     private int schemaCalls;
     private int publishCalls;
     private final List<StreamObserver<SchemaInfo>> heldSchemaObservers = new ArrayList<>();
+    private StreamObserver<PublishResponse> heldPublishObserver;
+    private PublishResponse heldPublishResponse;
     private ResponseMode responseMode = ResponseMode.SUCCESS;
 
     @Override
@@ -616,6 +745,14 @@ class SalesforcePublisherTest {
       String responseSchemaId =
           "/event/MismatchedSchema__e".equals(topic) ? "different-schema" : request.getSchemaId();
       String schemaJson = "/event/MalformedSchema__e".equals(topic) ? "not-json" : SCHEMA_JSON;
+      if ("schema-permissive".equals(request.getSchemaId())) {
+        schemaJson =
+            """
+            {"type":"record","name":"PermissiveEvent","fields":[
+              {"name":"Optional__c","type":["null","string"],"default":null}
+            ]}
+            """;
+      }
       observer.onNext(
           SchemaInfo.newBuilder().setSchemaId(responseSchemaId).setSchemaJson(schemaJson).build());
       observer.onCompleted();
@@ -664,8 +801,40 @@ class SalesforcePublisherTest {
       if (responseMode == ResponseMode.MULTIPLE) {
         response.addResults(result);
       }
+      if (responseMode == ResponseMode.HOLD_PUBLISH) {
+        ServerCallStreamObserver<PublishResponse> serverObserver =
+            (ServerCallStreamObserver<PublishResponse>) observer;
+        serverObserver.setOnCancelHandler(publishCancelled::countDown);
+        heldPublishObserver = observer;
+        heldPublishResponse = response.build();
+        publishReceived.countDown();
+        return;
+      }
       observer.onNext(response.build());
       observer.onCompleted();
+    }
+
+    private boolean awaitPublishReceived() throws InterruptedException {
+      return publishReceived.await(5, TimeUnit.SECONDS);
+    }
+
+    private boolean awaitPublishCancellation() throws InterruptedException {
+      return publishCancelled.await(5, TimeUnit.SECONDS);
+    }
+
+    private long publishCancellationCount() {
+      return publishCancelled.getCount();
+    }
+
+    private void releaseHeldPublish() {
+      StreamObserver<PublishResponse> observer = heldPublishObserver;
+      heldPublishObserver = null;
+      try {
+        observer.onNext(heldPublishResponse);
+        observer.onCompleted();
+      } catch (RuntimeException ignored) {
+        // The in-process server may reject a deliberately late response after cancellation.
+      }
     }
 
     private boolean awaitFirstHeldSchemaRequest() throws InterruptedException {
@@ -696,6 +865,9 @@ class SalesforcePublisherTest {
       }
       if ("/event/Held__e".equals(topic)) {
         return "schema-held";
+      }
+      if ("/event/Permissive__e".equals(topic)) {
+        return "schema-permissive";
       }
       if (topic.startsWith("/event/Eviction_")) {
         return "schema-eviction-"

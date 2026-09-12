@@ -43,7 +43,7 @@ public record PublishRequest(String topic, Map<String, Object> payload, String c
 
   private static Map<String, Object> snapshotPayload(Map<String, ?> value) {
     if (value == null) {
-      return Map.of();
+      return null;
     }
     return snapshotMap(value, Collections.newSetFromMap(new IdentityHashMap<>()));
   }
