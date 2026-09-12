@@ -41,22 +41,58 @@
 1. Select one approved GitHub Issue that is unblocked and manually set to
    `Ready`. Assign it a dedicated issue branch, worktree, and `coder`. Never
    implement in the shared/default worktree.
-2. Before editing, read the issue and applicable blueprint sections. The issue
-   bounds execution; the blueprint governs requirements. Stop on ambiguity,
-   missing prerequisites, or conflicts among blueprint, plan, issue, and code.
-   Do not guess or widen scope. Apply every relevant architecture, API,
-   security, delivery, test, and documentation rule from the blueprint.
-3. `coder` implements only that issue. `tester` defines expected behavior from
-   the issue and blueprint before reading the implementation, then verifies it
-   independently. `task_reviewer` reviews the completed task. These roles never
-   stage, commit, or push.
-4. Fresh tester evidence plus `READY FOR REVIEW` authorizes
+2. Before the `coder` edits, run `explorer` and `tester` in parallel to enrich
+   the selected work item's context:
+   - `explorer` reads the issue, applicable blueprint sections, approved plan,
+     affected code paths, and authoritative primary documentation when needed.
+     It produces an evidence packet containing exact public API signatures,
+     required invariants, dependency and sequencing constraints, security and
+     error-handling rules, likely affected paths, compatibility risks, and
+     unresolved ambiguities. Every item distinguishes a stated requirement
+     from an inference and cites its repository location or authoritative
+     source. The explorer is read-only and must not invent requirements or
+     widen scope.
+   - `tester` independently defines expected behavior, edge cases, failure
+     scenarios, and concrete acceptance tests from the issue and blueprint
+     before reading the implementation. During this phase it plans tests but
+     does not inspect an implementation delta or edit test files.
+   - Combine both handoffs into the enriched work-item context and give it to
+     the `coder`. Do not begin implementation until both are complete. Stop on
+     ambiguity, missing prerequisites, or conflicts among blueprint, plan,
+     issue, evidence, tests, and code.
+3. The issue bounds execution and the blueprint governs requirements. The
+   `coder` implements the production change only and maintains explicit
+   traceability from each explorer contract and tester scenario to the
+   implementation. Apply every relevant architecture, API, security, delivery,
+   and documentation rule. When exact public APIs are specified, verify the
+   compiled signatures and absence of forbidden exposed types, not only runtime
+   behavior. The `coder` does not create or modify tests; the `tester` owns test
+   implementation. Do not guess or widen scope.
+4. After the coder handoff, `tester` inspects the implementation, creates or
+   modifies the tests from its predeclared scenarios, and runs the required
+   focused and full verification:
+   - If a failure is caused by incorrect test code, fixtures, or test-only
+     helpers, the tester fixes only those test assets without weakening the
+     required assertion.
+   - If a failure exposes production logic, API, security, lifecycle, or
+     compatibility behavior, the tester reports the shortest reproduction and
+     evidence to the `coder` without editing production code. The coder fixes
+     it and returns the delta to the tester. Repeat until fresh verification
+     passes with no unresolved failures.
+   - Neither coder nor tester may mark the task ready for publication.
+5. `task_reviewer` independently re-verifies the complete production and test
+   delta against the issue, blueprint, enriched explorer evidence, tester's
+   predeclared scenarios, and fresh final test results. It never edits files or
+   repairs failures. Only its exact `READY FOR PR` verdict may authorize
+   publication. `explorer`, `coder`, `tester`, and `task_reviewer` never stage,
+   commit, or push.
+6. Fresh final tester evidence plus `READY FOR PR` authorizes
    `pull_request_opener`—the only role allowed to stage, commit, or push—to
    publish the exact reviewed current-worktree diff and open/update the same
    branch/worktree/PR. No additional human approval is required unless a
    current-head Copilot human-review escalation contains no concrete change or
    suggestion that the agents can implement.
-5. After opening a PR, the orchestrator performs an initial read and monitors
+7. After opening a PR, the orchestrator performs an initial read and monitors
    it with read-only `github` MCP calls at least 1 minute apart. Every poll must
    cover actual check-run contexts, review completion, unresolved current-head
    comments, approval, mergeability, and external auto-merge for the exact
@@ -68,15 +104,15 @@
    - **Actionable current-head review:** inspect current-head review bodies,
      summaries, suppressed findings, and review threads; a successful review
      check means the automation completed, not that the PR was approved.
-     Copilot recommendations may be accepted or disagreed with. No explorer
-     step is required when agents accept and will implement a recommendation.
-     If `coder` intends
-     to classify a Copilot recommendation as `Invalid` or `Already addressed`,
-     do not communicate that disagreement yet. First invoke `explorer` to trace
-     the finding against the affected code paths, tests, issue, blueprint, and
-     authoritative documentation when needed, then give that evidence to
-     `coder` for reconsideration. If explorer supports Copilot or evidence is
-     inconclusive, classify finding `Valid` and implement it.
+     Copilot recommendations may be accepted or disagreed with. Before the
+     coder edits, invoke `explorer` and `tester` in parallel: explorer traces
+     the finding against affected code paths, tests, issue, blueprint, and
+     authoritative documentation when needed; tester defines focused
+     regression scenarios without inspecting a future fix. Give both handoffs
+     to the coder. If `coder` intends to classify a recommendation as `Invalid`
+     or `Already addressed`, do not communicate that disagreement before this
+     evidence round. If explorer supports Copilot or evidence is inconclusive,
+     classify the finding `Valid` and implement it.
      Disagreement is allowed only when the explorer finds clear contrary
      evidence, `coder` addresses it, and `task_reviewer` accepts it. Invoke
      `coder` in the same worktree. Classify every eligible finding as `Valid`,
@@ -85,24 +121,27 @@
      or authoritative documentation evidence, including explorer handoff.
      Ignore resolved/outdated comments; do not reopen user-rejected findings
      without new evidence. Apply only minimal fixes.
-     Before inspecting the delta, `tester` defines focused checks; it then
-     verifies every `Valid` disposition and produces fresh evidence.
-     `task_reviewer` re-reviews without editing. After `READY FOR REVIEW`,
-     `pull_request_opener` publishes to the same branch/PR.
+     After the coder handoff, `tester` implements the predeclared regression
+     tests, fixes only test defects, and reports production failures back to the
+     coder for another implementation round. It verifies every `Valid`
+     disposition and produces fresh final evidence. `task_reviewer` then
+     re-verifies the complete delta without editing. Only after `READY FOR PR`
+     may `pull_request_opener` publish to the same branch/PR.
    - **Copilot human-review escalation:** a blue `Needs a closer look` outcome
      overrides normal agent-disagreement handling, even without an inline
      thread. Classify every concrete change or suggestion included in that
      escalation as `Valid (human-review-escalated)`. Do not disagree, classify
      it `Already addressed`, or invoke `explorer` to challenge it. `coder` must
-     implement the smallest in-scope fix, `tester` must run focused regression
-     coverage, and `task_reviewer` must approve the exact delta. After those
-     gates pass, `pull_request_opener` must commit and push the reviewed delta
+     implement the smallest in-scope fix, `tester` must implement and run
+     focused regression coverage, and `task_reviewer` must approve the exact
+     delta with `READY FOR PR`. After those gates pass, `pull_request_opener`
+     must commit and push the reviewed delta
      to the same PR without additional human approval, then trigger one
      rereview for the new head. Bind this action
      to exact PR number, Copilot review ID, and reviewed head SHA. Passing checks
      or resolved/outdated threads do not replace this round. If blue outcome
      contains no concrete implementable change or suggestion, block `READY FOR
-     REVIEW`, publication, and automated merge readiness until human explicitly
+     PR`, publication, and automated merge readiness until human explicitly
      accepts or redirects risk.
    - **Copilot review:** before requesting one, inspect reviews and checks for
      the current head SHA. Skip if already requested, running, or complete.
@@ -119,7 +158,7 @@
      exact head, CI, review, approval, mergeability, and merge state. Only an
      explicit later request to resume starts new 120- and 10-minute clocks.
    - Agents never merge. GitHub/Copilot may approve and auto-merge externally.
-6. `final_reviewer` evaluates milestone or release readiness across completed
+8. `final_reviewer` evaluates milestone or release readiness across completed
    tasks.
 
 ## Quality gates

@@ -93,6 +93,17 @@ public final class SalesforceSchemaCache {
     return callerStage(resolved);
   }
 
+  Schema resolvedSchema(String schemaId) {
+    CompletableFuture<Schema> resolved = cache.getIfPresent(schemaId);
+    if (resolved == null
+        || !resolved.isDone()
+        || resolved.isCancelled()
+        || resolved.isCompletedExceptionally()) {
+      return null;
+    }
+    return resolved.getNow(null);
+  }
+
   long estimatedSize() {
     return cache.estimatedSize();
   }

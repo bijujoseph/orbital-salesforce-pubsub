@@ -24,4 +24,12 @@ public final class EventDecodeException extends SalesforcePubSubException {
   public EventDecodeException(String message) {
     super(message);
   }
+
+  /** Creates a decode failure containing only a sanitized schema identifier. */
+  public static EventDecodeException forSchema(String schemaId) {
+    return new EventDecodeException(
+        "Unable to decode Salesforce event [schemaId="
+            + SafeExceptionContext.value(schemaId)
+            + "]");
+  }
 }
